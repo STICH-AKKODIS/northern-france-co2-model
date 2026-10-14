@@ -125,7 +125,7 @@ The displayed wall is:
 
 The shared assumptions are 120 bar design pressure, 0.72 design factor and 7,850 kg/m³ steel density. X65, X70, X80 and low-carbon X65 use a 3 mm corrosion allowance; the indicative 13Cr case uses 1 mm. Pipe mass is calculated from the annular steel area and indicative route length.
 
-The v0.4 X65 installed-cost correlation is retained exactly as the reference. For alternatives, 35% of installed route CAPEX is treated as material-sensitive:
+The X65 installed-cost correlation is used as the reference. For alternatives, 35% of installed route CAPEX is treated as material-sensitive:
 
 `CAPEX multiplier = 0.65 + 0.35 × (alternative steel mass / X65 steel mass) × relative material price`
 

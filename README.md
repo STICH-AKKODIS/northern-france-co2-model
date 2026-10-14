@@ -2,6 +2,8 @@
 
 A point-and-click model for presenting the northern industrial CO₂ chain to technical and non-technical audiences.
 
+**Current release: v0.5 — management scorecard and pipeline-material decision screen.**
+
 The model has three physical engineering sections plus an environmental-study layer:
 
 1. **Capture** at the industrial sources;
@@ -11,7 +13,17 @@ The model has three physical engineering sections plus an environmental-study la
 
 Liquefaction, shipping, injection and geological storage are outside the calculation.
 
-## Start the model
+## Open the interface
+
+### Online — no installation required
+
+Open the hosted Streamlit application:
+
+**https://northern-france-co2-model-sdam99xt44plsenyvgd8jk.streamlit.app/**
+
+Anyone with this link can use the interface from a modern web browser. If the application is sleeping, the first opening can take a short time while Streamlit starts it.
+
+### Local Windows launch
 
 Double-click:
 

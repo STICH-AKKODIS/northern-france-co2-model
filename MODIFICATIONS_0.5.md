@@ -18,7 +18,7 @@ Version 0.5 prepares the Streamlit model for a management presentation without c
 
 ## Preserved
 
-- X65 remains the reference and reproduces the v0.4 route CAPEX exactly.
+- X65 remains the reference case for route CAPEX and material comparisons.
 - Network enumeration, hydraulic diameters, Peng–Robinson density/compressibility, Darcy–Weisbach pressure loss and flow allocation are unchanged for the reference case.
 - Capture and purification technology assignments are unchanged.
 - The model boundary still ends at receipt at Dunkerque; shipping, injection and storage are excluded.

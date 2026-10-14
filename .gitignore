@@ -8,6 +8,7 @@ venv/
 .idea/
 .vscode/
 .codex_tmp/
+v05.zip
 
 # Generated model results (keep the explanatory README).
 outputs/*/
