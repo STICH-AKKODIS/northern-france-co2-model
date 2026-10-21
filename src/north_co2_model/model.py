@@ -6,7 +6,7 @@ import itertools
 import json
 import math
 import tomllib
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -37,6 +37,7 @@ class Source:
     announced_start_year: int | None
     project_name: str
     project_status: str
+    capture_technology_id: str
     capture_technology: str
     capturable_fraction: float
     capture_rate: float
@@ -48,6 +49,7 @@ class Source:
     capture_reference_capacity_tpy: float
     capture_scale_exponent: float
     capture_fixed_opex_fraction: float
+    purification_technology_id: str
     purification_train: str
     purification_recovery: float
     product_co2_mol_pct: float
@@ -97,6 +99,8 @@ class ModelInputs:
     sources: list[Source]
     product_limits: list[ProductLimit]
     reference_product_limits: list[ReferenceProductLimit]
+    capture_technologies: dict[str, dict[str, Any]]
+    purification_technologies: dict[str, dict[str, Any]]
 
 
 @dataclass
@@ -146,6 +150,7 @@ def _load_sources(path: Path) -> list[Source]:
                 announced_start_year=_optional_int(row["announced_start_year"]),
                 project_name=row["project_name"],
                 project_status=row["project_status"],
+                capture_technology_id=row["capture_technology_id"],
                 capture_technology=row["capture_technology"],
                 capturable_fraction=_float(row["capturable_fraction"]),
                 capture_rate=_float(row["capture_rate"]),
@@ -157,6 +162,7 @@ def _load_sources(path: Path) -> list[Source]:
                 capture_reference_capacity_tpy=_float(row["capture_reference_capacity_tpy"]),
                 capture_scale_exponent=_float(row["capture_scale_exponent"]),
                 capture_fixed_opex_fraction=_float(row["capture_fixed_opex_fraction"]),
+                purification_technology_id=row["purification_technology_id"],
                 purification_train=row["purification_train"],
                 purification_recovery=_float(row["purification_recovery"]),
                 product_co2_mol_pct=_float(row["product_co2_mol_pct"]),
@@ -218,6 +224,8 @@ def load_model_inputs(root: Path) -> ModelInputs:
     root = root.resolve()
     with (root / "config" / "model.toml").open("rb") as handle:
         config = tomllib.load(handle)
+    with (root / "config" / "technologies.toml").open("rb") as handle:
+        technologies = tomllib.load(handle)
     sources = _load_sources(root / "data" / "source_inventory.csv")
     product_limits = _load_product_limits(root / "data" / "co2_product_specification.csv")
     reference_product_limits = _load_reference_product_limits(
@@ -229,6 +237,8 @@ def load_model_inputs(root: Path) -> ModelInputs:
         sources=sources,
         product_limits=product_limits,
         reference_product_limits=reference_product_limits,
+        capture_technologies=technologies["capture"],
+        purification_technologies=technologies["purification"],
     )
 
 
@@ -266,6 +276,407 @@ def check_product_spec(source: Source, limits: Iterable[ProductLimit]) -> tuple[
     return not failures, failures
 
 
+def available_capture_technologies(
+    inputs: ModelInputs, source: Source
+) -> dict[str, dict[str, Any]]:
+    """Return capture technologies whose configured sector screen includes the source."""
+    return {
+        technology_id: values
+        for technology_id, values in inputs.capture_technologies.items()
+        if source.sector in values.get("compatible_sectors", [])
+    }
+
+
+def available_purification_technologies(
+    inputs: ModelInputs, source: Source | None = None
+) -> dict[str, dict[str, Any]]:
+    """Return the purification technologies available to the interactive model."""
+    del source
+    return dict(inputs.purification_technologies)
+
+
+def _bounded_value(
+    name: str,
+    value: float,
+    minimum: float,
+    maximum: float,
+) -> float:
+    value = float(value)
+    if not minimum <= value <= maximum:
+        raise ValueError(
+            f"{name}={value:g} is outside the configured technically screened "
+            f"range {minimum:g} to {maximum:g}."
+        )
+    return value
+
+
+def _piecewise_multiplier(
+    value: float,
+    minimum: float,
+    reference: float,
+    maximum: float,
+    multiplier_at_minimum: float,
+    multiplier_at_maximum: float,
+) -> float:
+    """Interpolate a transparent pre-FEED severity factor around a reference point."""
+    if value <= reference:
+        span = reference - minimum
+        fraction = (value - minimum) / span if span > 0 else 1.0
+        return multiplier_at_minimum + fraction * (1.0 - multiplier_at_minimum)
+    span = maximum - reference
+    fraction = (value - reference) / span if span > 0 else 0.0
+    return 1.0 + fraction * (multiplier_at_maximum - 1.0)
+
+
+def _normalised_increasing(value: float, minimum: float, maximum: float) -> float:
+    if maximum <= minimum:
+        return 0.0
+    return min(max((value - minimum) / (maximum - minimum), 0.0), 1.0)
+
+
+def _purification_effort(
+    technology: dict[str, Any],
+    recovery: float,
+    co2_mol_pct: float,
+    h2o_ppmv: float,
+    o2_ppmv: float,
+    nox_ppmv: float,
+    sox_ppmv: float,
+    co_ppmv: float,
+) -> float:
+    """Return a 0–1 separation-severity index used only for cost/energy interpolation."""
+    purity = _normalised_increasing(
+        co2_mol_pct,
+        float(technology["minimum_co2_mol_pct"]),
+        float(technology["maximum_co2_mol_pct"]),
+    )
+    recovery_effort = _normalised_increasing(
+        recovery,
+        float(technology["minimum_recovery"]),
+        float(technology["maximum_recovery"]),
+    )
+    dryness = 1.0 - _normalised_increasing(
+        h2o_ppmv,
+        float(technology["minimum_h2o_ppmv"]),
+        float(technology["maximum_h2o_ppmv"]),
+    )
+    impurity_targets = []
+    for component, value in (
+        ("o2", o2_ppmv),
+        ("nox", nox_ppmv),
+        ("sox", sox_ppmv),
+        ("co", co_ppmv),
+    ):
+        permissiveness = _normalised_increasing(
+            value,
+            float(technology[f"minimum_{component}_ppmv"]),
+            float(technology[f"maximum_{component}_ppmv"]),
+        )
+        impurity_targets.append(1.0 - permissiveness)
+    impurity_effort = sum(impurity_targets) / len(impurity_targets)
+    return 0.45 * purity + 0.25 * recovery_effort + 0.20 * dryness + 0.10 * impurity_effort
+
+
+def _purification_multiplier(
+    effort: float,
+    reference_effort: float,
+    minimum_multiplier: float,
+    maximum_multiplier: float,
+) -> float:
+    return _piecewise_multiplier(
+        effort,
+        0.0,
+        reference_effort,
+        1.0,
+        minimum_multiplier,
+        maximum_multiplier,
+    )
+
+
+def _apply_source_configuration(
+    inputs: ModelInputs,
+    source: Source,
+    override: dict[str, Any] | None,
+) -> tuple[Source, dict[str, Any]]:
+    """Resolve technology selections and operating targets to an effective source."""
+    override = dict(override or {})
+    allowed = {
+        "capture_technology_id",
+        "capture_rate",
+        "purification_technology_id",
+        "purification_recovery",
+        "product_co2_mol_pct",
+        "product_h2o_ppmv",
+        "product_o2_ppmv",
+        "product_nox_ppmv",
+        "product_sox_ppmv",
+        "product_co_ppmv",
+    }
+    unexpected = sorted(set(override) - allowed)
+    if unexpected:
+        raise ValueError(
+            f"Unsupported source overrides for {source.source_id}: {', '.join(unexpected)}"
+        )
+
+    capture_id = str(
+        override.get("capture_technology_id", source.capture_technology_id)
+    )
+    capture_options = available_capture_technologies(inputs, source)
+    if capture_id not in capture_options:
+        raise ValueError(
+            f"Capture technology {capture_id!r} is not configured as compatible "
+            f"with {source.source_id} ({source.sector})."
+        )
+    capture = capture_options[capture_id]
+    capture_default = (
+        source.capture_rate
+        if capture_id == source.capture_technology_id
+        else float(capture["reference_capture_rate"])
+    )
+    capture_rate = _bounded_value(
+        f"{source.source_id} capture rate",
+        float(override.get("capture_rate", capture_default)),
+        float(capture["minimum_capture_rate"]),
+        float(capture["maximum_capture_rate"]),
+    )
+    capture_energy_multiplier = _piecewise_multiplier(
+        capture_rate,
+        float(capture["minimum_capture_rate"]),
+        float(capture["reference_capture_rate"]),
+        float(capture["maximum_capture_rate"]),
+        float(capture["energy_multiplier_at_minimum"]),
+        float(capture["energy_multiplier_at_maximum"]),
+    )
+    capture_capex_multiplier = _piecewise_multiplier(
+        capture_rate,
+        float(capture["minimum_capture_rate"]),
+        float(capture["reference_capture_rate"]),
+        float(capture["maximum_capture_rate"]),
+        float(capture["capex_multiplier_at_minimum"]),
+        float(capture["capex_multiplier_at_maximum"]),
+    )
+    capture_opex_multiplier = _piecewise_multiplier(
+        capture_rate,
+        float(capture["minimum_capture_rate"]),
+        float(capture["reference_capture_rate"]),
+        float(capture["maximum_capture_rate"]),
+        float(capture["variable_opex_multiplier_at_minimum"]),
+        float(capture["variable_opex_multiplier_at_maximum"]),
+    )
+
+    purification_id = str(
+        override.get(
+            "purification_technology_id", source.purification_technology_id
+        )
+    )
+    if purification_id not in inputs.purification_technologies:
+        raise ValueError(f"Unknown purification technology: {purification_id}")
+    purification = inputs.purification_technologies[purification_id]
+    use_source_defaults = purification_id == source.purification_technology_id
+
+    def target(field: str, source_value: float, reference_key: str) -> float:
+        default = source_value if use_source_defaults else float(purification[reference_key])
+        return float(override.get(field, default))
+
+    recovery = _bounded_value(
+        f"{source.source_id} purification recovery",
+        target("purification_recovery", source.purification_recovery, "reference_recovery"),
+        float(purification["minimum_recovery"]),
+        float(purification["maximum_recovery"]),
+    )
+    product_targets: dict[str, float] = {}
+    for field, source_value, component in (
+        ("product_co2_mol_pct", source.product_co2_mol_pct, "co2_mol_pct"),
+        ("product_h2o_ppmv", source.product_h2o_ppmv, "h2o_ppmv"),
+        ("product_o2_ppmv", source.product_o2_ppmv, "o2_ppmv"),
+        ("product_nox_ppmv", source.product_nox_ppmv, "nox_ppmv"),
+        ("product_sox_ppmv", source.product_sox_ppmv, "sox_ppmv"),
+        ("product_co_ppmv", source.product_co_ppmv, "co_ppmv"),
+    ):
+        value = target(field, source_value, f"reference_{component}")
+        product_targets[field] = _bounded_value(
+            f"{source.source_id} {field}",
+            value,
+            float(purification[f"minimum_{component}"]),
+            float(purification[f"maximum_{component}"]),
+        )
+    trace_mol_pct = sum(
+        product_targets[field] / 10_000.0
+        for field in (
+            "product_h2o_ppmv",
+            "product_o2_ppmv",
+            "product_nox_ppmv",
+            "product_sox_ppmv",
+            "product_co_ppmv",
+        )
+    )
+    if product_targets["product_co2_mol_pct"] + trace_mol_pct > 100.0 + 1e-9:
+        raise ValueError(
+            f"{source.source_id} product composition exceeds 100 mol-% after "
+            "including the selected trace-component targets."
+        )
+
+    effort = _purification_effort(
+        purification,
+        recovery,
+        product_targets["product_co2_mol_pct"],
+        product_targets["product_h2o_ppmv"],
+        product_targets["product_o2_ppmv"],
+        product_targets["product_nox_ppmv"],
+        product_targets["product_sox_ppmv"],
+        product_targets["product_co_ppmv"],
+    )
+    reference_effort = _purification_effort(
+        purification,
+        float(purification["reference_recovery"]),
+        float(purification["reference_co2_mol_pct"]),
+        float(purification["reference_h2o_ppmv"]),
+        float(purification["reference_o2_ppmv"]),
+        float(purification["reference_nox_ppmv"]),
+        float(purification["reference_sox_ppmv"]),
+        float(purification["reference_co_ppmv"]),
+    )
+    purification_energy_multiplier = _purification_multiplier(
+        effort,
+        reference_effort,
+        float(purification["minimum_energy_multiplier"]),
+        float(purification["maximum_energy_multiplier"]),
+    )
+    purification_capex_multiplier = _purification_multiplier(
+        effort,
+        reference_effort,
+        float(purification["minimum_capex_multiplier"]),
+        float(purification["maximum_capex_multiplier"]),
+    )
+    purification_opex_multiplier = _purification_multiplier(
+        effort,
+        reference_effort,
+        float(purification["minimum_variable_opex_multiplier"]),
+        float(purification["maximum_variable_opex_multiplier"]),
+    )
+
+    effective = replace(
+        source,
+        capture_technology_id=capture_id,
+        capture_technology=str(capture["label"]),
+        capture_rate=capture_rate,
+        capture_electricity_mwh_per_t_captured=float(
+            capture["electricity_mwh_per_t_captured"]
+        )
+        * capture_energy_multiplier,
+        capture_steam_gj_per_t_captured=float(capture["steam_gj_per_t_captured"])
+        * capture_energy_multiplier,
+        capture_variable_opex_eur_per_t_captured=float(
+            capture["variable_opex_eur_per_t_captured"]
+        )
+        * capture_opex_multiplier,
+        capture_reference_capex_meur=float(capture["reference_capex_meur"])
+        * capture_capex_multiplier,
+        capture_reference_capacity_tpy=float(capture["reference_capacity_tpy"]),
+        capture_scale_exponent=float(capture["scale_exponent"]),
+        capture_fixed_opex_fraction=float(capture["fixed_opex_fraction"]),
+        purification_technology_id=purification_id,
+        purification_train=str(purification["label"]),
+        purification_recovery=recovery,
+        purification_electricity_mwh_per_t_product=float(
+            purification["electricity_mwh_per_t_product"]
+        )
+        * purification_energy_multiplier,
+        purification_variable_opex_eur_per_t_product=float(
+            purification["variable_opex_eur_per_t_product"]
+        )
+        * purification_opex_multiplier,
+        purification_reference_capex_meur=float(
+            purification["reference_capex_meur"]
+        )
+        * purification_capex_multiplier,
+        purification_reference_capacity_tpy=float(
+            purification["reference_capacity_tpy"]
+        ),
+        purification_scale_exponent=float(purification["scale_exponent"]),
+        purification_fixed_opex_fraction=float(
+            purification["fixed_opex_fraction"]
+        ),
+        **product_targets,
+    )
+    configuration_customized = (
+        capture_id != source.capture_technology_id
+        or not math.isclose(capture_rate, source.capture_rate, rel_tol=0.0, abs_tol=1e-12)
+        or purification_id != source.purification_technology_id
+        or not math.isclose(recovery, source.purification_recovery, rel_tol=0.0, abs_tol=1e-12)
+        or any(
+            not math.isclose(
+                product_targets[field],
+                float(getattr(source, field)),
+                rel_tol=0.0,
+                abs_tol=1e-12,
+            )
+            for field in product_targets
+        )
+    )
+    metadata = {
+        "configuration_customized": configuration_customized,
+        "capture_technology_readiness_level": int(
+            capture["technology_readiness_level"]
+        ),
+        "capture_safety_category": str(capture["safety_category"]),
+        "capture_safety_level": int(capture["safety_level"]),
+        "capture_hazards": str(capture["hazards"]),
+        "capture_basis_note": str(capture["basis_note"]),
+        "capture_target_energy_multiplier": capture_energy_multiplier,
+        "capture_target_capex_multiplier": capture_capex_multiplier,
+        "purification_technology_readiness_level": int(
+            purification["technology_readiness_level"]
+        ),
+        "purification_safety_category": str(purification["safety_category"]),
+        "purification_safety_level": int(purification["safety_level"]),
+        "purification_hazards": str(purification["hazards"]),
+        "purification_basis_note": str(purification["basis_note"]),
+        "purification_separation_effort_index": effort,
+        "purification_target_energy_multiplier": purification_energy_multiplier,
+        "purification_target_capex_multiplier": purification_capex_multiplier,
+    }
+    return effective, metadata
+
+
+def _source_safety_screen(
+    source: Source,
+    spec_pass: bool,
+    spec_failures: list[str],
+    metadata: dict[str, Any],
+) -> dict[str, Any]:
+    """Provide a transparent hazard/quality screen, not a quantitative risk study."""
+    flags: list[str] = []
+    if not spec_pass:
+        flags.append("Selected product misses the external receiver-quality benchmark")
+    if source.product_co2_mol_pct < 99.81:
+        flags.append("Detailed mixture phase-envelope verification required")
+    if source.product_h2o_ppmv > 30.0:
+        flags.append("Water target increases corrosion and hydrate-management concern")
+    if source.product_o2_ppmv > 10.0:
+        flags.append("Oxygen target requires corrosion and materials review")
+    if int(metadata["capture_safety_level"]) >= 3:
+        flags.append(str(metadata["capture_safety_category"]))
+    if int(metadata["purification_safety_level"]) >= 3:
+        flags.append(str(metadata["purification_safety_category"]))
+
+    red = (
+        source.product_co2_mol_pct < 95.0
+        or source.product_h2o_ppmv > 100.0
+        or source.product_o2_ppmv > 5000.0
+    )
+    status = "Red" if red else ("Amber" if flags else "Green")
+    return {
+        "process_safety_screen_status": status,
+        "process_safety_screen_flags": "; ".join(flags),
+        "receiver_quality_status": "PASS" if spec_pass else "FAIL",
+        "phase_envelope_review_required": source.product_co2_mol_pct < 99.81
+        or not spec_pass,
+        "technical_target_within_catalogue_range": True,
+        "product_spec_failure_count": len(spec_failures),
+    }
+
+
 def _emissions_for_basis(source: Source, flow_basis: str) -> float:
     if flow_basis == "irep_2024_total":
         return source.irep_2024_total_co2_tpy
@@ -284,12 +695,16 @@ def _emissions_for_basis(source: Source, flow_basis: str) -> float:
     raise ValueError(f"Unsupported flow basis: {flow_basis}")
 
 
-def _potential_product_flow(source: Source, flow_basis: str) -> tuple[float, float, float]:
-    emissions = _emissions_for_basis(source, flow_basis)
-    if flow_basis == "announced_product":
-        product = source.announced_product_co2_tpy
-        captured = product / source.purification_recovery if source.purification_recovery else 0.0
-        return captured, product, emissions
+def _potential_product_flow(
+    source: Source,
+    flow_basis: str,
+    emissions_basis_tpy: float | None = None,
+) -> tuple[float, float, float]:
+    emissions = (
+        _emissions_for_basis(source, flow_basis)
+        if emissions_basis_tpy is None
+        else float(emissions_basis_tpy)
+    )
     captured = (
         emissions
         * source.capturable_fraction
@@ -386,17 +801,33 @@ def _purification_economics(source: Source, product_flow_tpy: float, finance: di
     }
 
 
-def build_source_results(inputs: ModelInputs, scenario_name: str) -> list[dict[str, Any]]:
+def build_source_results(
+    inputs: ModelInputs,
+    scenario_name: str,
+    source_overrides: dict[str, dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
     scenario = inputs.config["scenarios"][scenario_name]
     finance = inputs.config["finance"]
     active_ids = set(scenario["active_source_ids"])
     flow_basis = scenario["flow_basis"]
 
     working: list[dict[str, Any]] = []
-    for source in inputs.sources:
+    source_overrides = source_overrides or {}
+    for baseline_source in inputs.sources:
+        source, technology_metadata = _apply_source_configuration(
+            inputs,
+            baseline_source,
+            source_overrides.get(baseline_source.source_id),
+        )
         spec_pass, spec_failures = check_product_spec(source, inputs.product_limits)
-        captured_potential, product_potential, emissions = _potential_product_flow(source, flow_basis)
-        if source.source_id not in active_ids or not spec_pass:
+        safety_screen = _source_safety_screen(
+            source, spec_pass, spec_failures, technology_metadata
+        )
+        baseline_emissions = _emissions_for_basis(baseline_source, flow_basis)
+        captured_potential, product_potential, emissions = _potential_product_flow(
+            source, flow_basis, baseline_emissions
+        )
+        if source.source_id not in active_ids:
             captured_potential = 0.0
             product_potential = 0.0
         capture_screening = _capture_economics(source, captured_potential, finance)
@@ -415,6 +846,8 @@ def build_source_results(inputs: ModelInputs, scenario_name: str) -> list[dict[s
                 "potential_product_tpy": product_potential,
                 "spec_pass": spec_pass,
                 "spec_failures": spec_failures,
+                "technology_metadata": technology_metadata,
+                "safety_screen": safety_screen,
                 "screening_cost_eur_per_t": screening_cost,
             }
         )
@@ -459,7 +892,9 @@ def build_source_results(inputs: ModelInputs, scenario_name: str) -> list[dict[s
             "sector": source.sector,
             "project_name": source.project_name,
             "project_status": source.project_status,
+            "capture_technology_id": source.capture_technology_id,
             "capture_technology": source.capture_technology,
+            "purification_technology_id": source.purification_technology_id,
             "purification_train": source.purification_train,
             "assumption_quality": source.assumption_quality,
             "cost_uncertainty_fraction": uncertainty,
@@ -494,6 +929,8 @@ def build_source_results(inputs: ModelInputs, scenario_name: str) -> list[dict[s
             "latitude": source.latitude,
             "irep_id": source.irep_id,
             "primary_source_url": source.primary_source_url,
+            **item["technology_metadata"],
+            **item["safety_screen"],
             **capture_economics,
             **purification_economics,
         }
@@ -627,6 +1064,17 @@ def _pipe_hydraulics(flow_tpy: float, length_km: float, diameter_m: float, trans
     inlet_pressure_bar = float(transport["inlet_pressure_bar"])
     minimum_pressure_bar = float(transport["minimum_arrival_pressure_bar"])
     pressure_window_bar = inlet_pressure_bar - minimum_pressure_bar
+    composition_total = sum(composition.values())
+    mixture_mw = sum(
+        mole_fraction / composition_total * PR_COMPONENTS[component]["MW"]
+        for component, mole_fraction in composition.items()
+    )
+    co2_mass_fraction = (
+        composition.get("CO2", 0.0)
+        / composition_total
+        * PR_COMPONENTS["CO2"]["MW"]
+        / mixture_mw
+    )
 
     if flow_tpy <= 0 or length_km <= 0:
         props = _peng_robinson_properties(inlet_pressure_bar, temperature_c, composition)
@@ -640,9 +1088,14 @@ def _pipe_hydraulics(flow_tpy: float, length_km: float, diameter_m: float, trans
             "eos_reference_pressure_bar": inlet_pressure_bar,
             "eos_temperature_c": temperature_c,
             "equation_of_state": "Peng-Robinson",
+            "co2_mass_fraction": co2_mass_fraction,
+            "total_stream_flow_tpy": 0.0,
         }
 
-    mass_flow_kg_s = flow_tpy * 1000.0 / (transport["operating_hours_per_year"] * 3600.0)
+    total_stream_flow_tpy = flow_tpy / max(co2_mass_fraction, 1e-12)
+    mass_flow_kg_s = total_stream_flow_tpy * 1000.0 / (
+        transport["operating_hours_per_year"] * 3600.0
+    )
     area = math.pi * diameter_m**2 / 4.0
     viscosity = float(transport["co2_viscosity_pa_s"])
 
@@ -702,6 +1155,8 @@ def _pipe_hydraulics(flow_tpy: float, length_km: float, diameter_m: float, trans
         "eos_reference_pressure_bar": reference_pressure_bar,
         "eos_temperature_c": temperature_c,
         "equation_of_state": "Peng-Robinson",
+        "co2_mass_fraction": co2_mass_fraction,
+        "total_stream_flow_tpy": total_stream_flow_tpy,
     }
 
 
@@ -1054,13 +1509,68 @@ def optimize_pipeline_network(
     return best
 
 
-def run_scenario(inputs: ModelInputs, scenario_name: str) -> ScenarioResult:
+def _blended_transport_composition(
+    source_results: list[dict[str, Any]],
+    base_composition: dict[str, float],
+) -> dict[str, float]:
+    """Build a flow-weighted dry-gas PR composition from allocated source products."""
+    active = [row for row in source_results if row["allocated_product_co2_tpy"] > 0]
+    if not active:
+        return {key: float(value) for key, value in base_composition.items()}
+
+    total_flow = sum(float(row["allocated_product_co2_tpy"]) for row in active)
+    co2 = sum(
+        float(row["allocated_product_co2_tpy"])
+        * float(row["product_co2_mol_pct"])
+        / 100.0
+        for row in active
+    ) / total_flow
+    o2 = sum(
+        float(row["allocated_product_co2_tpy"])
+        * float(row["product_o2_ppmv"])
+        / 1_000_000.0
+        for row in active
+    ) / total_flow
+    remainder = max(1.0 - co2 - o2, 0.0)
+    base_n2 = float(base_composition.get("N2", 0.0))
+    base_ar = float(base_composition.get("Ar", 0.0))
+    inert_total = base_n2 + base_ar
+    ar_share = base_ar / inert_total if inert_total > 0 else 0.25
+    composition = {
+        "CO2": co2,
+        "N2": remainder * (1.0 - ar_share),
+        "O2": o2,
+        "Ar": remainder * ar_share,
+    }
+    total = sum(composition.values())
+    return {key: value / total for key, value in composition.items()}
+
+
+def run_scenario(
+    inputs: ModelInputs,
+    scenario_name: str,
+    source_overrides: dict[str, dict[str, Any]] | None = None,
+) -> ScenarioResult:
     if scenario_name not in inputs.config["scenarios"]:
         raise KeyError(f"Unknown scenario: {scenario_name}")
     scenario = inputs.config["scenarios"][scenario_name]
-    source_results = build_source_results(inputs, scenario_name)
-    pipeline = optimize_pipeline_network(inputs, source_results)
-    _enrich_pipeline_material_summary(pipeline, inputs.config["transport"])
+    source_results = build_source_results(inputs, scenario_name, source_overrides)
+    calculation_config = copy.deepcopy(inputs.config)
+    calculation_config["transport"]["eos_composition"] = _blended_transport_composition(
+        source_results,
+        calculation_config["transport"]["eos_composition"],
+    )
+    calculation_inputs = ModelInputs(
+        root=inputs.root,
+        config=calculation_config,
+        sources=inputs.sources,
+        product_limits=inputs.product_limits,
+        reference_product_limits=inputs.reference_product_limits,
+        capture_technologies=inputs.capture_technologies,
+        purification_technologies=inputs.purification_technologies,
+    )
+    pipeline = optimize_pipeline_network(calculation_inputs, source_results)
+    _enrich_pipeline_material_summary(pipeline, calculation_config["transport"])
 
     total_allocated = sum(row["allocated_product_co2_tpy"] for row in source_results)
     sink_received = max(total_allocated - pipeline["pipeline_leakage_tpy"], 0.0)
@@ -1079,8 +1589,12 @@ def run_scenario(inputs: ModelInputs, scenario_name: str) -> ScenarioResult:
         sink_received - capture_energy_emissions - purification_energy_emissions,
         0.0,
     )
-    environmental = calculate_environmental_study(source_results, pipeline, inputs.config)
-    transport_uncertainty = float(inputs.config["transport"]["cost_uncertainty_fraction"])
+    environmental = calculate_environmental_study(
+        source_results, pipeline, calculation_config
+    )
+    transport_uncertainty = float(
+        calculation_config["transport"]["cost_uncertainty_fraction"]
+    )
     annual_cost_low = (
         sum(row["capture_annual_cost_low_eur"] for row in source_results)
         + sum(row["purification_annual_cost_low_eur"] for row in source_results)
@@ -1117,6 +1631,36 @@ def run_scenario(inputs: ModelInputs, scenario_name: str) -> ScenarioResult:
         "all_active_streams_pass_screened_product_spec": all(
             row["product_spec_pass"] for row in source_results if row["allocated_product_co2_tpy"] > 0
         ),
+        "active_streams_failing_screened_product_spec": sum(
+            not row["product_spec_pass"]
+            for row in source_results
+            if row["allocated_product_co2_tpy"] > 0
+        ),
+        "customized_source_configurations": sum(
+            row["configuration_customized"]
+            for row in source_results
+            if row["allocated_product_co2_tpy"] > 0
+        ),
+        "process_safety_green_sources": sum(
+            row["process_safety_screen_status"] == "Green"
+            for row in source_results
+            if row["allocated_product_co2_tpy"] > 0
+        ),
+        "process_safety_amber_sources": sum(
+            row["process_safety_screen_status"] == "Amber"
+            for row in source_results
+            if row["allocated_product_co2_tpy"] > 0
+        ),
+        "process_safety_red_sources": sum(
+            row["process_safety_screen_status"] == "Red"
+            for row in source_results
+            if row["allocated_product_co2_tpy"] > 0
+        ),
+        "phase_envelope_review_source_count": sum(
+            row["phase_envelope_review_required"]
+            for row in source_results
+            if row["allocated_product_co2_tpy"] > 0
+        ),
         "product_spec_components_screened": len(inputs.product_limits),
         "product_spec_components_in_reference": len(inputs.reference_product_limits),
         "product_spec_screening_coverage_fraction": (
@@ -1130,6 +1674,15 @@ def run_scenario(inputs: ModelInputs, scenario_name: str) -> ScenarioResult:
         ),
         "capture_energy_emissions_tpy": capture_energy_emissions,
         "purification_energy_emissions_tpy": purification_energy_emissions,
+        "capture_electricity_mwh_per_year": sum(
+            row["capture_electricity_mwh_per_year"] for row in source_results
+        ),
+        "capture_steam_gj_per_year": sum(
+            row["capture_steam_gj_per_year"] for row in source_results
+        ),
+        "purification_electricity_mwh_per_year": sum(
+            row["purification_electricity_mwh_per_year"] for row in source_results
+        ),
         "pipeline_leakage_tpy": pipeline["pipeline_leakage_tpy"],
         "chain_net_avoided_co2_tpy": chain_net_avoided,
         "capture_capex_eur": capture_capex,
@@ -1170,8 +1723,13 @@ def run_scenario(inputs: ModelInputs, scenario_name: str) -> ScenarioResult:
         "minimum_arrival_pressure_bar": pipeline["minimum_arrival_pressure_bar"],
         "candidate_pipeline_trees_evaluated": pipeline["candidate_trees_evaluated"],
         "transport_equation_of_state": "Peng-Robinson",
-        "transport_eos_temperature_c": float(inputs.config["transport"]["temperature_c"]),
-        "transport_eos_composition_mol_fraction": dict(inputs.config["transport"]["eos_composition"]),
+        "transport_eos_temperature_c": float(calculation_config["transport"]["temperature_c"]),
+        "transport_eos_composition_mol_fraction": dict(calculation_config["transport"]["eos_composition"]),
+        "transport_eos_composition_basis": (
+            "Flow-weighted selected product targets"
+            if any(row["allocated_product_co2_tpy"] > 0 for row in source_results)
+            else "Configured reference composition"
+        ),
         "transport_eos_binary_interaction_parameters": "kij = 0 (classical screening mixing rule)",
         "transport_eos_density_min_kg_per_m3": min((row["eos_density_kg_per_m3"] for row in pipeline["segments"]), default=0.0),
         "transport_eos_density_max_kg_per_m3": max((row["eos_density_kg_per_m3"] for row in pipeline["segments"]), default=0.0),
@@ -1324,6 +1882,7 @@ def run_custom_scenario(
     enforce_sink_capacity: bool = True,
     finance_overrides: dict[str, float] | None = None,
     transport_overrides: dict[str, str] | None = None,
+    source_overrides: dict[str, dict[str, Any]] | None = None,
     scenario_name: str = "custom_case",
 ) -> ScenarioResult:
     """Run a UI-defined case without changing any files on disk."""
@@ -1334,6 +1893,11 @@ def run_custom_scenario(
         raise ValueError(f"Unknown source IDs: {', '.join(unknown)}")
     if sink_capacity_tpy <= 0:
         raise ValueError("Sink receiving capacity must be positive.")
+    unknown_override_ids = sorted(set(source_overrides or {}) - valid_ids)
+    if unknown_override_ids:
+        raise ValueError(
+            f"Source overrides contain unknown IDs: {', '.join(unknown_override_ids)}"
+        )
 
     custom_config = copy.deepcopy(inputs.config)
     if finance_overrides:
@@ -1371,8 +1935,10 @@ def run_custom_scenario(
         sources=inputs.sources,
         product_limits=inputs.product_limits,
         reference_product_limits=inputs.reference_product_limits,
+        capture_technologies=inputs.capture_technologies,
+        purification_technologies=inputs.purification_technologies,
     )
-    return run_scenario(custom_inputs, scenario_name)
+    return run_scenario(custom_inputs, scenario_name, source_overrides)
 
 
 def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:

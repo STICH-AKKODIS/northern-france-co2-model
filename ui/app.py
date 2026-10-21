@@ -18,6 +18,8 @@ if str(SRC) not in sys.path:
 from north_co2_model.model import (
     ModelInputs,
     ScenarioResult,
+    available_capture_technologies,
+    available_purification_technologies,
     build_material_comparison,
     load_model_inputs,
     run_custom_scenario,
@@ -105,6 +107,7 @@ def calculate_case(
     discount_rate: float,
     project_life: int,
     pipeline_material: str,
+    source_overrides_json: str,
 ) -> ScenarioResult:
     return run_custom_scenario(
         get_inputs(),
@@ -119,6 +122,7 @@ def calculate_case(
             "project_life_years": project_life,
         },
         transport_overrides={"pipeline_material": pipeline_material},
+        source_overrides=json.loads(source_overrides_json),
         scenario_name=scenario_name,
     )
 
@@ -169,6 +173,182 @@ def standard_parameters(inputs: ModelInputs, scenario_id: str) -> dict[str, Any]
         "sink_capacity_tpy": float(case["sink_capacity_tpy"]),
         "enforce_capacity": bool(case["enforce_sink_capacity"]),
     }
+
+
+def source_configuration_controls(
+    inputs: ModelInputs,
+    active_ids: tuple[str, ...],
+) -> dict[str, dict[str, Any]]:
+    """Render per-source technology and product-target controls."""
+    st.markdown("#### Source technology & targets")
+    st.caption(
+        "Each source is independent. Options are filtered by sector and every target "
+        "is bounded by the selected technology's configured screening range."
+    )
+    overrides: dict[str, dict[str, Any]] = {}
+    active_set = set(active_ids)
+    for source in inputs.sources:
+        if source.source_id not in active_set:
+            continue
+        capture_options = available_capture_technologies(inputs, source)
+        purification_options = available_purification_technologies(inputs, source)
+        with st.expander(
+            f"{source.source_id} · {source.commune} · {SECTOR_LABELS[source.sector]}",
+            expanded=False,
+        ):
+            capture_labels = {
+                str(values["label"]): technology_id
+                for technology_id, values in capture_options.items()
+            }
+            default_capture_label = str(
+                capture_options[source.capture_technology_id]["label"]
+            )
+            capture_label = st.selectbox(
+                "Capture technology",
+                list(capture_labels),
+                index=list(capture_labels).index(default_capture_label),
+                key=f"{source.source_id}_capture_technology",
+            )
+            capture_id = capture_labels[capture_label]
+            capture = capture_options[capture_id]
+            capture_rate_key = f"{source.source_id}_capture_rate_pct"
+            capture_last_key = f"{source.source_id}_capture_last_selection"
+            if st.session_state.get(capture_last_key) != capture_id:
+                default_capture_rate = (
+                    source.capture_rate
+                    if capture_id == source.capture_technology_id
+                    else float(capture["reference_capture_rate"])
+                )
+                st.session_state[capture_rate_key] = default_capture_rate * 100.0
+                st.session_state[capture_last_key] = capture_id
+            capture_rate_pct = st.slider(
+                "CO₂ capture efficiency",
+                min_value=float(capture["minimum_capture_rate"]) * 100.0,
+                max_value=float(capture["maximum_capture_rate"]) * 100.0,
+                step=0.5,
+                format="%.1f%%",
+                key=capture_rate_key,
+                help="Fraction of CO₂ in the capturable source stream separated by the selected capture process.",
+            )
+            st.caption(
+                f"TRL {int(capture['technology_readiness_level'])} · "
+                f"{capture['safety_category']}"
+            )
+
+            purification_labels = {
+                str(values["label"]): technology_id
+                for technology_id, values in purification_options.items()
+            }
+            default_purification_label = str(
+                purification_options[source.purification_technology_id]["label"]
+            )
+            purification_label = st.selectbox(
+                "Purification technology",
+                list(purification_labels),
+                index=list(purification_labels).index(default_purification_label),
+                key=f"{source.source_id}_purification_technology",
+            )
+            purification_id = purification_labels[purification_label]
+            purification = purification_options[purification_id]
+            purification_last_key = f"{source.source_id}_purification_last_selection"
+            target_keys = {
+                "recovery": f"{source.source_id}_purification_recovery_pct",
+                "co2": f"{source.source_id}_product_co2_mol_pct",
+                "h2o": f"{source.source_id}_product_h2o_ppmv",
+                "o2": f"{source.source_id}_product_o2_ppmv",
+                "nox": f"{source.source_id}_product_nox_ppmv",
+                "sox": f"{source.source_id}_product_sox_ppmv",
+                "co": f"{source.source_id}_product_co_ppmv",
+            }
+            if st.session_state.get(purification_last_key) != purification_id:
+                same_as_source = (
+                    purification_id == source.purification_technology_id
+                )
+                st.session_state[target_keys["recovery"]] = 100.0 * (
+                    source.purification_recovery
+                    if same_as_source
+                    else float(purification["reference_recovery"])
+                )
+                for short_name, source_field, reference_field in (
+                    ("co2", "product_co2_mol_pct", "reference_co2_mol_pct"),
+                    ("h2o", "product_h2o_ppmv", "reference_h2o_ppmv"),
+                    ("o2", "product_o2_ppmv", "reference_o2_ppmv"),
+                    ("nox", "product_nox_ppmv", "reference_nox_ppmv"),
+                    ("sox", "product_sox_ppmv", "reference_sox_ppmv"),
+                    ("co", "product_co_ppmv", "reference_co_ppmv"),
+                ):
+                    st.session_state[target_keys[short_name]] = (
+                        float(getattr(source, source_field))
+                        if same_as_source
+                        else float(purification[reference_field])
+                    )
+                st.session_state[purification_last_key] = purification_id
+
+            recovery_pct = st.slider(
+                "CO₂ recovery through purification",
+                min_value=float(purification["minimum_recovery"]) * 100.0,
+                max_value=float(purification["maximum_recovery"]) * 100.0,
+                step=0.1,
+                format="%.1f%%",
+                key=target_keys["recovery"],
+            )
+            product_co2 = st.number_input(
+                "Product CO₂ purity (mol-%)",
+                min_value=float(purification["minimum_co2_mol_pct"]),
+                max_value=float(purification["maximum_co2_mol_pct"]),
+                step=0.05,
+                format="%.3f",
+                key=target_keys["co2"],
+            )
+            product_h2o = st.number_input(
+                "Product H₂O (ppmv)",
+                min_value=float(purification["minimum_h2o_ppmv"]),
+                max_value=float(purification["maximum_h2o_ppmv"]),
+                step=1.0,
+                format="%.1f",
+                key=target_keys["h2o"],
+            )
+            advanced = st.checkbox(
+                "Adjust O₂, NOₓ, SOₓ and CO targets",
+                key=f"{source.source_id}_advanced_impurities",
+            )
+            impurity_values: dict[str, float] = {}
+            for short_name, label in (
+                ("o2", "O₂"),
+                ("nox", "NOₓ"),
+                ("sox", "SOₓ"),
+                ("co", "CO"),
+            ):
+                if advanced:
+                    impurity_values[short_name] = st.number_input(
+                        f"Product {label} (ppmv)",
+                        min_value=float(purification[f"minimum_{short_name}_ppmv"]),
+                        max_value=float(purification[f"maximum_{short_name}_ppmv"]),
+                        step=1.0 if short_name in {"o2", "co"} else 0.1,
+                        format="%.1f",
+                        key=target_keys[short_name],
+                    )
+                else:
+                    impurity_values[short_name] = float(
+                        st.session_state[target_keys[short_name]]
+                    )
+            st.caption(
+                f"TRL {int(purification['technology_readiness_level'])} · "
+                f"{purification['safety_category']}"
+            )
+            overrides[source.source_id] = {
+                "capture_technology_id": capture_id,
+                "capture_rate": capture_rate_pct / 100.0,
+                "purification_technology_id": purification_id,
+                "purification_recovery": recovery_pct / 100.0,
+                "product_co2_mol_pct": float(product_co2),
+                "product_h2o_ppmv": float(product_h2o),
+                "product_o2_ppmv": impurity_values["o2"],
+                "product_nox_ppmv": impurity_values["nox"],
+                "product_sox_ppmv": impurity_values["sox"],
+                "product_co_ppmv": impurity_values["co"],
+            }
+    return overrides
 
 
 def pipeline_figure(inputs: ModelInputs, result: ScenarioResult) -> go.Figure:
@@ -343,6 +523,11 @@ with st.sidebar:
         sink_capacity_tpy = params["sink_capacity_tpy"]
         enforce_capacity = params["enforce_capacity"]
 
+    source_overrides = source_configuration_controls(inputs, active_ids)
+    source_overrides_json = json.dumps(
+        source_overrides, sort_keys=True, separators=(",", ":")
+    )
+
     with st.expander("Economic sensitivity", expanded=False):
         electricity_price = st.number_input(
             "Electricity price (€/MWh)",
@@ -417,6 +602,7 @@ with st.sidebar:
         project_life,
         pipeline_material,
         carbon_value,
+        source_overrides_json,
     )
     run_clicked = st.button(
         "▶  Run selected scenario",
@@ -433,11 +619,11 @@ with st.sidebar:
         """,
         unsafe_allow_html=True,
     )
-    st.caption("Version 0.5 · management scorecard + material screen")
+    st.caption("Version 0.6 · source technology and product-quality configurator")
 
 if run_clicked or "result" not in st.session_state:
     with st.spinner("Calculating the capture, purification and transport chain…"):
-        st.session_state.result = calculate_case(
+        calculated_result = calculate_case(
             meta["id"],
             active_ids,
             flow_basis,
@@ -448,6 +634,25 @@ if run_clicked or "result" not in st.session_state:
             discount_rate_pct / 100.0,
             project_life,
             pipeline_material,
+            source_overrides_json,
+        )
+        st.session_state.result = calculated_result
+        st.session_state.baseline_result = (
+            calculate_case(
+                meta["id"],
+                active_ids,
+                flow_basis,
+                sink_capacity_tpy,
+                enforce_capacity,
+                electricity_price,
+                steam_price,
+                discount_rate_pct / 100.0,
+                project_life,
+                pipeline_material,
+                "{}",
+            )
+            if calculated_result.summary["customized_source_configurations"] > 0
+            else calculated_result
         )
         st.session_state.signature = signature
         st.session_state.display_label = selected_label
@@ -460,7 +665,9 @@ if run_clicked or "result" not in st.session_state:
         st.session_state.run_project_life = project_life
 
 result: ScenarioResult = st.session_state.result
+baseline_result: ScenarioResult = st.session_state.get("baseline_result", result)
 summary = result.summary
+baseline_summary = baseline_result.summary
 result_label = st.session_state.display_label
 result_description = st.session_state.display_description
 carbon_value = float(st.session_state.get("carbon_value", carbon_value))
@@ -641,6 +848,25 @@ decision_rows = [
         "Management meaning": "Advance vendor data and source testing before sanction.",
     },
     {
+        "Decision gate": "Selected product and process-safety screen",
+        "Status": (
+            "● Red"
+            if summary["process_safety_red_sources"] > 0
+            else (
+                "● Amber"
+                if summary["process_safety_amber_sources"] > 0
+                or summary["active_streams_failing_screened_product_spec"] > 0
+                else "● Green"
+            )
+        ),
+        "Result": (
+            f"{summary['active_streams_failing_screened_product_spec']} quality fail; "
+            f"{summary['process_safety_amber_sources']} amber / "
+            f"{summary['process_safety_red_sources']} red safety screens"
+        ),
+        "Management meaning": "Flags respond to the selected technology, purity, water and impurity targets; they are a hazard screen, not a QRA.",
+    },
+    {
         "Decision gate": "Product-quality evidence",
         "Status": "● Green" if coverage >= 1.0 else ("● Amber" if coverage >= 0.50 else "● Red"),
         "Result": f"{summary['product_spec_components_screened']}/{summary['product_spec_components_in_reference']} benchmark components",
@@ -677,12 +903,16 @@ with tabs[0]:
                 "ID": row["source_id"],
                 "Source": row["source_name"],
                 "Sector": SECTOR_LABELS[row["sector"]],
+                "Capture technology": row["capture_technology"],
                 "Emissions basis (kt/y)": row["emissions_basis_tpy"] / 1000.0,
                 "Captured (kt/y)": row["captured_before_purification_tpy"] / 1000.0,
                 "Capture rate": row["capture_rate"],
                 "Availability": row["availability"],
+                "Electricity (MWh/t captured)": row["capture_electricity_mwh_per_year"] / row["captured_before_purification_tpy"] if row["captured_before_purification_tpy"] else 0.0,
+                "Steam (GJ/t captured)": row["capture_steam_gj_per_year"] / row["captured_before_purification_tpy"] if row["captured_before_purification_tpy"] else 0.0,
                 "CAPEX (€m)": row["capture_capex_eur"] / 1e6,
                 "Cost (€/t product)": row["capture_cost_eur_per_t_product"],
+                "TRL": row["capture_technology_readiness_level"],
                 "Maturity": row["project_status"].replace("-", " ").title(),
             }
             for row in active_rows
@@ -717,6 +947,8 @@ with tabs[0]:
             "Captured (kt/y)": st.column_config.NumberColumn(format="%.1f"),
             "CAPEX (€m)": st.column_config.NumberColumn(format="%.1f"),
             "Cost (€/t product)": st.column_config.NumberColumn(format="%.1f"),
+            "Electricity (MWh/t captured)": st.column_config.NumberColumn(format="%.3f"),
+            "Steam (GJ/t captured)": st.column_config.NumberColumn(format="%.2f"),
         },
     )
     with st.expander("How the capture result is calculated"):
@@ -749,6 +981,8 @@ with tabs[1]:
         [
             {
                 "ID": row["source_id"],
+                "Source": row["source_name"],
+                "Purification technology": row["purification_train"],
                 "Captured feed (kt/y)": row["captured_before_purification_tpy"] / 1000.0,
                 "Product (kt/y)": row["allocated_product_co2_tpy"] / 1000.0,
                 "Recovery": row["purification_recovery"],
@@ -758,7 +992,11 @@ with tabs[1]:
                 "NOₓ (ppmv)": row["product_nox_ppmv"],
                 "SOₓ (ppmv)": row["product_sox_ppmv"],
                 "CO (ppmv)": row["product_co_ppmv"],
-                "Screen": "PASS" if row["product_spec_screening_pass"] else "FAIL",
+                "Quality benchmark": row["receiver_quality_status"],
+                "Safety screen": row["process_safety_screen_status"],
+                "Safety / quality flags": row["process_safety_screen_flags"] or "No flag in the configured screen",
+                "Electricity (MWh/t product)": row["purification_electricity_mwh_per_year"] / row["allocated_product_co2_tpy"] if row["allocated_product_co2_tpy"] else 0.0,
+                "Cost (€/t product)": row["purification_cost_eur_per_t_product"],
                 "CAPEX (€m)": row["purification_capex_eur"] / 1e6,
             }
             for row in active_rows
@@ -771,10 +1009,19 @@ with tabs[1]:
         column_config={
             "Captured feed (kt/y)": st.column_config.NumberColumn(format="%.1f"),
             "Product (kt/y)": st.column_config.NumberColumn(format="%.1f"),
-            "Recovery": st.column_config.ProgressColumn(format="percent", min_value=0.95, max_value=1.0),
+            "Recovery": st.column_config.ProgressColumn(format="percent", min_value=0.90, max_value=1.0),
             "CAPEX (€m)": st.column_config.NumberColumn(format="%.1f"),
+            "Electricity (MWh/t product)": st.column_config.NumberColumn(format="%.3f"),
+            "Cost (€/t product)": st.column_config.NumberColumn(format="%.1f"),
         },
     )
+
+    if summary["active_streams_failing_screened_product_spec"]:
+        st.warning(
+            f"{summary['active_streams_failing_screened_product_spec']} selected stream(s) miss the external product-quality benchmark. "
+            "Their economics and hydraulics are retained for comparison, but the configuration is visibly flagged for additional conditioning or a different receiver specification.",
+            icon="⚠️",
+        )
 
     limit_df = pd.DataFrame(
         [
@@ -850,6 +1097,22 @@ with tabs[2]:
         help="Calculated pipe steel mass for the selected material screen; excludes fittings, valves and facilities.",
     )
 
+    eos_composition = summary["transport_eos_composition_mol_fraction"]
+    st.caption(
+        "Peng–Robinson mixture used for hydraulics: "
+        f"CO₂ {100 * eos_composition['CO2']:.3f} mol-% · "
+        f"N₂ {100 * eos_composition['N2']:.3f} mol-% · "
+        f"O₂ {1_000_000 * eos_composition['O2']:.1f} ppmv · "
+        f"Ar {100 * eos_composition['Ar']:.3f} mol-% · "
+        f"{summary['transport_eos_composition_basis']}."
+    )
+    if summary["phase_envelope_review_source_count"]:
+        st.warning(
+            f"{summary['phase_envelope_review_source_count']} allocated stream(s) require a detailed multi-component phase-envelope check. "
+            "The PR EOS still updates density and pressure loss for scenario comparison, but this flag must be cleared before fixing the operating envelope.",
+            icon="⚠️",
+        )
+
     st.plotly_chart(pipeline_figure(inputs, result), width="stretch", config={"displayModeBar": False})
 
     transport_df = pd.DataFrame(
@@ -858,7 +1121,9 @@ with tabs[2]:
                 "From": row["from_node"],
                 "To": "Dunkerque sink" if row["to_node"] == "SINK" else row["to_node"],
                 "Route (km)": row["route_length_km"],
-                "Flow (Mt/y)": row["flow_tpy"] / 1e6,
+                "CO₂ flow (Mt/y)": row["flow_tpy"] / 1e6,
+                "Total stream (Mt/y)": row["total_stream_flow_tpy"] / 1e6,
+                "CO₂ mass fraction": row["co2_mass_fraction"],
                 "Diameter": f"DN {row['nominal_diameter_mm']:.0f}",
                 "Material": row["pipeline_material_label"],
                 "Wall (mm)": row["wall_thickness_mm"],
@@ -879,7 +1144,9 @@ with tabs[2]:
         width="stretch",
         column_config={
             "Route (km)": st.column_config.NumberColumn(format="%.1f"),
-            "Flow (Mt/y)": st.column_config.NumberColumn(format="%.3f"),
+            "CO₂ flow (Mt/y)": st.column_config.NumberColumn(format="%.3f"),
+            "Total stream (Mt/y)": st.column_config.NumberColumn(format="%.3f"),
+            "CO₂ mass fraction": st.column_config.ProgressColumn(format="percent", min_value=0.90, max_value=1.0),
             "Wall (mm)": st.column_config.NumberColumn(format="%.1f"),
             "Steel (t)": st.column_config.NumberColumn(format="%.0f"),
             "PR density (kg/m³)": st.column_config.NumberColumn(format="%.1f"),
@@ -1085,6 +1352,103 @@ with tabs[4]:
         <div class="section-lead"><b>Management question:</b> which pipeline material gives the most useful balance of cost, carbon and robustness, and which assumptions move the decision most? The material comparison holds the selected topology and hydraulic diameters fixed so the trade-off remains understandable.</div>
         """,
         unsafe_allow_html=True,
+    )
+
+    if summary["customized_source_configurations"] > 0:
+        st.markdown("#### Impact versus source defaults")
+        impact_kpis = st.columns(4)
+        impact_kpis[0].metric(
+            "Pipeline product",
+            fmt_mt(summary["total_purified_co2_tpy"]),
+            delta=f"{(summary['total_purified_co2_tpy'] - baseline_summary['total_purified_co2_tpy']) / 1000:+.1f} kt/y",
+        )
+        impact_kpis[1].metric(
+            "Full-chain cost",
+            f"€{summary['full_chain_cost_eur_per_t_received']:.1f}/t",
+            delta=f"€{summary['full_chain_cost_eur_per_t_received'] - baseline_summary['full_chain_cost_eur_per_t_received']:+.1f}/t",
+            delta_color="inverse",
+        )
+        impact_kpis[2].metric(
+            "Lifecycle climate burden",
+            f"{summary['environmental_total_climate_burden_tco2e_per_year'] / 1000:.1f} kt/y",
+            delta=f"{(summary['environmental_total_climate_burden_tco2e_per_year'] - baseline_summary['environmental_total_climate_burden_tco2e_per_year']) / 1000:+.1f} kt/y",
+            delta_color="inverse",
+        )
+        impact_kpis[3].metric(
+            "Lifecycle CO₂ avoided",
+            fmt_mt(summary["environmental_lifecycle_net_avoided_co2_tpy"]),
+            delta=f"{(summary['environmental_lifecycle_net_avoided_co2_tpy'] - baseline_summary['environmental_lifecycle_net_avoided_co2_tpy']) / 1000:+.1f} kt/y",
+        )
+        st.caption(
+            "The comparator keeps the same scenario, sources, economics, receiver capacity and pipeline material, but restores each source's default capture and purification configuration."
+        )
+
+    st.markdown("#### Selected source configurations")
+    baseline_source_lookup = {
+        row["source_id"]: row for row in baseline_result.source_results
+    }
+    configuration_df = pd.DataFrame(
+        [
+            {
+                "ID": row["source_id"],
+                "Capture technology": row["capture_technology"],
+                "Capture": row["capture_rate"],
+                "Purification technology": row["purification_train"],
+                "Recovery": row["purification_recovery"],
+                "CO₂ purity (mol-%)": row["product_co2_mol_pct"],
+                "H₂O (ppmv)": row["product_h2o_ppmv"],
+                "Product (kt/y)": row["allocated_product_co2_tpy"] / 1000.0,
+                "Δ product vs default (kt/y)": (
+                    row["allocated_product_co2_tpy"]
+                    - baseline_source_lookup[row["source_id"]]["allocated_product_co2_tpy"]
+                )
+                / 1000.0,
+                "Source energy (kt CO₂-eq/y)": row["source_energy_emissions_tpy"] / 1000.0,
+                "Capture + purification cost (€/t product)": (
+                    row["capture_cost_eur_per_t_product"]
+                    + row["purification_cost_eur_per_t_product"]
+                ),
+                "Δ source cost vs default (€/t)": (
+                    row["capture_cost_eur_per_t_product"]
+                    + row["purification_cost_eur_per_t_product"]
+                    - baseline_source_lookup[row["source_id"]]["capture_cost_eur_per_t_product"]
+                    - baseline_source_lookup[row["source_id"]]["purification_cost_eur_per_t_product"]
+                ),
+                "Quality": row["receiver_quality_status"],
+                "Safety": row["process_safety_screen_status"],
+            }
+            for row in active_rows
+        ]
+    )
+    st.dataframe(
+        configuration_df,
+        hide_index=True,
+        width="stretch",
+        column_config={
+            "Capture": st.column_config.ProgressColumn(
+                format="percent", min_value=0.80, max_value=1.0
+            ),
+            "Recovery": st.column_config.ProgressColumn(
+                format="percent", min_value=0.90, max_value=1.0
+            ),
+            "CO₂ purity (mol-%)": st.column_config.NumberColumn(format="%.3f"),
+            "H₂O (ppmv)": st.column_config.NumberColumn(format="%.1f"),
+            "Product (kt/y)": st.column_config.NumberColumn(format="%.1f"),
+            "Δ product vs default (kt/y)": st.column_config.NumberColumn(format="%+.1f"),
+            "Source energy (kt CO₂-eq/y)": st.column_config.NumberColumn(
+                format="%.1f"
+            ),
+            "Capture + purification cost (€/t product)": st.column_config.NumberColumn(
+                format="%.1f"
+            ),
+            "Δ source cost vs default (€/t)": st.column_config.NumberColumn(
+                format="%+.1f"
+            ),
+        },
+    )
+    st.caption(
+        "Change any source technology or target in the sidebar, then run the scenario. "
+        "Mass balance, source CAPEX/OPEX, energy emissions, product quality, PR composition, hydraulics and management indicators are recalculated together."
     )
 
     selected_material_row = selected_material_decision

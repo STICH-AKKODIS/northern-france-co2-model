@@ -37,6 +37,17 @@ class DashboardSmokeTests(unittest.TestCase):
         self.assertEqual(self.dashboard.selectbox[0].value, "Announced projects · 2030")
         self.assertTrue(any("Run selected scenario" in button.label for button in self.dashboard.button))
 
+    def test_source_technology_and_quality_controls_are_present(self) -> None:
+        selectbox_labels = [element.label for element in self.dashboard.selectbox]
+        slider_labels = [element.label for element in self.dashboard.slider]
+        number_input_labels = [element.label for element in self.dashboard.number_input]
+        self.assertIn("Capture technology", selectbox_labels)
+        self.assertIn("Purification technology", selectbox_labels)
+        self.assertIn("CO₂ capture efficiency", slider_labels)
+        self.assertIn("CO₂ recovery through purification", slider_labels)
+        self.assertIn("Product CO₂ purity (mol-%)", number_input_labels)
+        self.assertIn("Product H₂O (ppmv)", number_input_labels)
+
 
 if __name__ == "__main__":
     unittest.main()

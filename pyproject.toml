@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "north-co2-model"
-version = "0.5.0"
+version = "0.6.0"
 description = "Interactive capture, purification, Peng-Robinson pipeline transport and environmental screening model for northern France industrial CO2 sources."
 readme = "README.md"
 requires-python = ">=3.11"

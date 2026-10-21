@@ -2,7 +2,7 @@
 
 A point-and-click model for presenting the northern industrial CO₂ chain to technical and non-technical audiences.
 
-**Current release: v0.5 — management scorecard and pipeline-material decision screen.**
+**Current release: v0.6 — per-source capture/purification configuration and dynamic impact assessment.**
 
 The model has three physical engineering sections plus an environmental-study layer:
 
@@ -36,12 +36,13 @@ No command-line knowledge is required.
 ## Recommended presentation workflow
 
 1. Start with **Announced projects · 2030**. This is the most defensible base case because it uses the named CalCC and K6 project flows.
-2. Use the three engineering cards to explain the flow from captured CO₂ to purified product to Dunkerque receipt, then open the environmental study.
-3. Read the independent **Executive decision gates**; a red gate is not hidden by a composite score.
-4. Open the **Capture**, **Purification**, **Transport to sink**, **Environmental study** and **Decision lab** tabs in order.
-5. In the Decision lab, compare material cost and embodied carbon and explain the result at the selected CO₂-value threshold.
-6. Switch to **Verified 2024 cluster potential** to discuss the wider regional opportunity and its larger uncertainty.
-7. Use **Build a custom case** only when the group wants to include/exclude sources or test economic assumptions.
+2. Open each source under **Source technology & targets**. Capture and purification technologies, capture efficiency, purification recovery, CO₂ purity, H₂O, O₂, NOₓ, SOₓ and CO can be set independently.
+3. Click **Run selected scenario**. The model recalculates the complete mass, energy, cost, emissions, product-quality, safety-screen and hydraulic result.
+4. Use the three engineering cards to explain the flow from captured CO₂ to purified product to Dunkerque receipt, then open the environmental study.
+5. Read the independent **Executive decision gates**; a red gate is not hidden by a composite score.
+6. Open the **Capture**, **Purification**, **Transport to sink**, **Environmental study** and **Decision lab** tabs in order.
+7. In the Decision lab, compare the selected source configurations and pipeline-material cost/carbon trade-off.
+8. Switch to **Verified 2024 cluster potential** to discuss the wider regional opportunity and its larger uncertainty.
 
 See `docs/USER_GUIDE.md` for a short facilitator guide.
 
@@ -79,22 +80,27 @@ These are screening/pre-FEED estimates, not vendor quotations or a routed constr
 ### Capture
 
 - source-specific capturable fraction, unit capture rate and availability;
-- Cryocap, oxyfuel/Cryocap, amine and DMX technology mappings;
+- independently selectable sector-compatible Cryocap, oxyfuel/Cryocap, conventional amine, dilute-gas amine and DMX technology mappings;
+- technology-specific feasible capture-rate ranges, with target-dependent energy, CAPEX and OPEX interpolation;
 - scaled CAPEX, annualized capital, fixed O&M, consumables, electricity and steam;
 - capture-energy emissions.
 
 ### Purification
 
 - independent recovery and mass loss;
+- independently selectable dehydration, molecular-sieve, cryogenic, non-condensable-removal and membrane-hybrid trains;
+- adjustable recovery, CO₂ purity, H₂O, O₂, NOₓ, SOₓ and CO targets within technology-specific ranges;
+- target-dependent purification energy, CAPEX and OPEX;
 - dehydration, polishing and compression to 110 bar;
 - independent CAPEX, OPEX and electricity;
-- screening against six published product-quality limits.
+- screening against six published product-quality limits, plus a qualitative technology/quality safety screen.
 
 ### Transport
 
 - every feasible source/sink network tree without free junction nodes, up to 1,296 topologies;
 - flow aggregation, standard diameter selection and route uplifts;
-- Peng–Robinson EOS density/compressibility at 35 °C with a CO₂-rich multicomponent design composition;
+- Peng–Robinson EOS density/compressibility at 35 °C using a flow-weighted CO₂/N₂/O₂/Ar composition built from the selected source-product targets;
+- impurity-corrected total stream mass flow for velocity and pressure-loss calculations while CO₂ accounting remains on a CO₂-mass basis;
 - Darcy–Weisbach pressure loss and Swamee–Jain friction;
 - velocity and minimum-arrival-pressure constraints;
 - installed pipeline CAPEX, O&M and estimated leakage.
@@ -111,7 +117,8 @@ These are screening/pre-FEED estimates, not vendor quotations or a routed constr
 
 ### Management decision lab
 
-- independent traffic-light gates for economics, hydraulics, receiver utilization, source maturity and quality evidence;
+- independent traffic-light gates for economics, hydraulics, receiver utilization, source maturity, selected product/process safety and quality evidence;
+- a source-configuration table joining technology, performance, cost, energy, product quality and safety status;
 - material cost-versus-carbon comparison on the same optimized network and diameters;
 - annual value headroom and indicative simple payback at a user-selected CO₂ value;
 - ranked one-at-a-time exposure of levelized cost to ±20% input changes;
@@ -133,6 +140,7 @@ The model also corrects the legacy endpoint coordinate and uses Lambert-93 consi
 | `ui/` | Dashboard and presentation theme |
 | `src/north_co2_model/` | Engineering model and reports |
 | `config/model.toml` | Finance, pipeline, sink and scenario settings |
+| `config/technologies.toml` | Capture/purification options, feasible ranges, cost/energy interpolation and hazard notes |
 | `data/` | Active source inventory and quality limits |
 | `docs/` | Assumptions, data quality and user guide |
 | `tests/` | Regression checks |

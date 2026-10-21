@@ -208,6 +208,113 @@ class ModelRegressionTests(unittest.TestCase):
         self.assertEqual(custom.summary["active_sources"], 1)
         self.assertEqual(set(self.inputs.config["scenarios"]), original_scenarios)
 
+    def test_source_specific_capture_target_propagates(self) -> None:
+        base = run_custom_scenario(
+            self.inputs,
+            active_source_ids=["S2"],
+            flow_basis="irep_2024_total",
+            sink_capacity_tpy=1_500_000.0,
+        )
+        high_capture = run_custom_scenario(
+            self.inputs,
+            active_source_ids=["S2"],
+            flow_basis="irep_2024_total",
+            sink_capacity_tpy=1_500_000.0,
+            source_overrides={"S2": {"capture_rate": 0.98}},
+        )
+        base_row = next(row for row in base.source_results if row["source_id"] == "S2")
+        high_row = next(row for row in high_capture.source_results if row["source_id"] == "S2")
+        self.assertAlmostEqual(high_row["capture_rate"], 0.98)
+        self.assertGreater(
+            high_row["allocated_product_co2_tpy"],
+            base_row["allocated_product_co2_tpy"],
+        )
+        self.assertGreater(
+            high_row["capture_electricity_mwh_per_year"],
+            base_row["capture_electricity_mwh_per_year"],
+        )
+        self.assertGreater(
+            high_capture.summary["capture_annual_cost_eur"],
+            base.summary["capture_annual_cost_eur"],
+        )
+
+    def test_purity_target_changes_cost_quality_safety_and_eos(self) -> None:
+        low_purity = run_custom_scenario(
+            self.inputs,
+            active_source_ids=["S2"],
+            flow_basis="irep_2024_total",
+            sink_capacity_tpy=1_500_000.0,
+            source_overrides={"S2": {"product_co2_mol_pct": 95.0}},
+        )
+        high_purity = run_custom_scenario(
+            self.inputs,
+            active_source_ids=["S2"],
+            flow_basis="irep_2024_total",
+            sink_capacity_tpy=1_500_000.0,
+            source_overrides={"S2": {"product_co2_mol_pct": 99.95}},
+        )
+        low_row = next(row for row in low_purity.source_results if row["source_id"] == "S2")
+        high_row = next(row for row in high_purity.source_results if row["source_id"] == "S2")
+        self.assertFalse(low_row["product_spec_pass"])
+        self.assertEqual(low_row["process_safety_screen_status"], "Amber")
+        self.assertTrue(high_row["product_spec_pass"])
+        self.assertGreater(
+            high_row["purification_electricity_mwh_per_year"]
+            / high_row["allocated_product_co2_tpy"],
+            low_row["purification_electricity_mwh_per_year"]
+            / low_row["allocated_product_co2_tpy"],
+        )
+        self.assertAlmostEqual(
+            low_purity.summary["transport_eos_composition_mol_fraction"]["CO2"],
+            0.95,
+            places=6,
+        )
+        self.assertGreater(
+            high_purity.summary["transport_eos_density_min_kg_per_m3"],
+            low_purity.summary["transport_eos_density_min_kg_per_m3"],
+        )
+
+    def test_capture_and_purification_technologies_are_independent_by_source(self) -> None:
+        custom = run_custom_scenario(
+            self.inputs,
+            active_source_ids=["S1", "S3"],
+            flow_basis="irep_2024_total",
+            sink_capacity_tpy=1_500_000.0,
+            source_overrides={
+                "S1": {
+                    "capture_technology_id": "post_combustion_amine",
+                    "capture_rate": 0.95,
+                    "purification_technology_id": "membrane_hybrid",
+                    "purification_recovery": 0.97,
+                    "product_co2_mol_pct": 98.0,
+                    "product_h2o_ppmv": 30.0,
+                    "product_o2_ppmv": 100.0,
+                    "product_nox_ppmv": 2.0,
+                    "product_sox_ppmv": 2.0,
+                    "product_co_ppmv": 100.0,
+                }
+            },
+        )
+        rows = {row["source_id"]: row for row in custom.source_results}
+        self.assertEqual(rows["S1"]["capture_technology_id"], "post_combustion_amine")
+        self.assertEqual(rows["S1"]["purification_technology_id"], "membrane_hybrid")
+        self.assertEqual(rows["S3"]["capture_technology_id"], "oxyfuel_cryocap")
+        self.assertEqual(rows["S3"]["purification_technology_id"], "cryogenic_polishing")
+        self.assertEqual(
+            next(source for source in self.inputs.sources if source.source_id == "S1").capture_technology_id,
+            "cryocap_fg",
+        )
+
+    def test_infeasible_target_is_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "outside the configured technically screened range"):
+            run_custom_scenario(
+                self.inputs,
+                active_source_ids=["S4"],
+                flow_basis="irep_2024_total",
+                sink_capacity_tpy=1_500_000.0,
+                source_overrides={"S4": {"capture_rate": 0.98}},
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

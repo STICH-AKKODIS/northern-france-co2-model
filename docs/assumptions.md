@@ -46,6 +46,18 @@ Capture CAPEX is scaled as:
 
 Annual capture cost includes annualized CAPEX, fixed O&M, electricity, steam and consumables. The 6% real discount rate and 25-year project life can be changed in the interface.
 
+### 3.1 Interactive capture technology and efficiency
+
+Each active source can use any capture technology whose `compatible_sectors` list in `config/technologies.toml` contains that source's sector. The catalogue currently contains Cryocap FG, post-combustion amine, oxyfuel/Cryocap Oxy, dilute-gas amine and DMX. Each option has its own reference capture rate, technically screened minimum/maximum rate, reference capacity, CAPEX, electricity, steam, consumables, fixed O&M, scale exponent, readiness and hazard note.
+
+The model does not extrapolate outside the technology range. Within the range, target-dependent energy, CAPEX and variable-OPEX multipliers are piecewise-linear about the reference point:
+
+`m(x) = m_min + (x − x_min)/(x_ref − x_min) × (1 − m_min), for x ≤ x_ref`
+
+`m(x) = 1 + (x − x_ref)/(x_max − x_ref) × (m_max − 1), for x > x_ref`
+
+The selected multiplier is applied to the technology's reference utility intensity or reference CAPEX before normal flow scaling. This makes a 98% capture target require more energy/capital than the same technology at its reference rate while preserving the published base-source results at their default settings. It is a transparent screening interpolation, not an absorber/stripper simulation.
+
 ## 4. Purification
 
 `pipeline product = captured CO₂ × purification recovery`
@@ -83,6 +95,20 @@ The complete traceability table is in `data/co2_receiving_specification_referenc
 
 Reference: https://norlights.com/wp-content/uploads/2025/06/Liquid-specification-2306251.pdf
 
+### 4.1 Interactive purification technology and product targets
+
+Each source can independently select molecular-sieve polishing, standard dehydration/polishing, cryogenic polishing, enhanced dehydration, non-condensable removal or a membrane-hybrid train. The selectable bounds in `config/technologies.toml` cover purification recovery, CO₂ molar purity, H₂O, O₂, NOₓ, SOₓ and CO. The component targets are checked for a physically coherent total composition and rejected if the stated CO₂ plus trace components exceeds 100 mol-%.
+
+Purification energy, CAPEX and variable OPEX respond to a dimensionless separation-effort index:
+
+`E = 0.45 P + 0.25 R + 0.20 D + 0.10 I`
+
+where `P` is normalized CO₂-purity stringency, `R` is normalized recovery, `D` is normalized dryness stringency (lower H₂O is more severe), and `I` is the mean normalized removal stringency for O₂, NOₓ, SOₓ and CO. Every term is bounded between zero and one using that technology's minimum and maximum. Energy/CAPEX/OPEX multipliers are interpolated around the technology's reference effort with the same piecewise form used for capture.
+
+A configuration that misses the six-component external quality benchmark remains calculable. This is deliberate: it allows a 95% and 99.5% product case to be compared economically and hydraulically. The result is marked `FAIL`, receives an Amber safety/quality flag, and is counted in the executive gate. It must not be interpreted as receiver acceptance.
+
+The qualitative process-safety screen combines the selected technology's hazard category with water, oxygen, purity, receiver-quality and phase-envelope flags. It is an auditable screening status, not a quantitative risk assessment, HAZOP, LOPA or QRA.
+
 ## 5. Transport to Dunkerque
 
 Every source/sink spanning tree without free junction nodes is evaluated. With five sources plus the sink, the complete Cayley set contains `6^(6-2) = 1,296` trees. Each candidate is oriented toward Dunkerque, branch flows are accumulated, standard diameters are selected and the least annualized-cost feasible topology is retained.
@@ -97,7 +123,8 @@ Hydraulic basis:
 - maximum velocity 2.5 m/s;
 - Peng–Robinson mixture EOS for density and compressibility at the segment representative pressure;
 - transport temperature 35 °C;
-- EOS design composition: CO₂ 0.9992, N₂ 0.0005, O₂ 0.0001 and Ar 0.0002 mole fraction;
+- base EOS design composition: CO₂ 0.9992, N₂ 0.0005, O₂ 0.0001 and Ar 0.0002 mole fraction;
+- for allocated sources, flow-weighted CO₂ and O₂ targets are used and the remaining dry-gas fraction is split between N₂ and Ar in the configured base ratio; the base composition is retained only when no source flow is allocated;
 - classical quadratic mixing rule with binary interaction parameters `kij = 0`;
 - screening viscosity `7×10⁻⁵ Pa·s`;
 - carbon-steel roughness 0.045 mm;
@@ -106,6 +133,8 @@ Hydraulic basis:
 - estimated leakage `0.02% per 100 km` of segment throughput.
 
 Pipeline diameter is based on flow during the 8,000 operating hours, not a 365-day average. For each candidate diameter, PR density and Z are iterated at an estimated segment-mean pressure before Darcy–Weisbach loss is evaluated. Segments are upsized until every source-to-sink path satisfies both velocity and cumulative pressure-drop limits.
+
+The source and sink ledgers remain expressed as tonnes of CO₂. For hydraulics, that CO₂ flow is divided by the PR mixture's CO₂ mass fraction to obtain total stream mass flow. This correction is material for lower-purity comparison cases and prevents a 95 mol-% product from being treated as if the whole transported stream were pure CO₂. Trace H₂O, NOₓ, SOₓ and CO are screened for quality/safety but are not separate PR components; they are included in the dry inert balance at this level. A detailed phase-envelope warning is raised for customized compositions that miss the external benchmark or fall below its CO₂ target.
 
 The installed-cost correlation is anchored at €1.9 million/km for DN 300, scaled with diameter exponent 1.20. It includes a €5 million connection allowance per active source. A 2% fixed O&M factor is applied.
 
