@@ -111,15 +111,30 @@ The qualitative process-safety screen combines the selected technology's hazard 
 
 ## 5. Transport to Dunkerque
 
-Every source/sink spanning tree without free junction nodes is evaluated. With five sources plus the sink, the complete Cayley set contains `6^(6-2) = 1,296` trees. Each candidate is oriented toward Dunkerque, branch flows are accumulated, standard diameters are selected and the least annualized-cost feasible topology is retained.
+Two route modes are available. The default automatic mode evaluates every source/sink spanning tree without free junction nodes. With five sources plus the sink, the complete Cayley set contains `6^(6-2) = 1,296` trees. Each candidate is oriented toward Dunkerque, branch flows are accumulated, standard diameters are selected and the least annualized-cost feasible topology is retained.
 
 Straight-line Lambert-93 distances are multiplied by documented source-specific route factors from 1.10 to 1.35. These are early corridor allowances, not surveyed routes.
+
+The imported trajectory mode replaces those route factors with ordered Lambert-93 X/Y points and optional Z elevation in metres read from the supplied QGIS vertex CSVs (grouped by `id` and ordered by `vertex_part` and `vertex_part_index`). Source coordinates remain fixed from the inventory; the endpoint is either the sink or the nearest vertex on a selected downstream source route. Route dependencies must be acyclic. A stream joining another route follows its downstream segments, and shared segment flow is summed. Source and sink gaps, and any gaps between multipart features, are modeled as straight connectors after explicit review. **QGIS Z is used when supplied.** Optional field names include `Z`, `z_m`, `elevation`, and `altitude` (metres). Missing or NULL values default to Z = 0 m and are reported. The adjacent source takes its elevation from the oriented first CSV vertex. The receiving sink takes its elevation from a CSV endpoint that exactly matches the configured sink location; otherwise its elevation is 0 m. Contradictory elevations at a shared sink block the import. Three-dimensional lengths and static head are calculated from these elevations. Zero elevations and straight connectors are assumptions, not surveyed terrain.
+
+For user-defined segments, plan and three-dimensional lengths are:
+
+`L_plan = sqrt((X₂ − X₁)² + (Y₂ − Y₁)²)`
+
+`L_3D = sqrt((X₂ − X₁)² + (Y₂ − Y₁)² + (Z₂ − Z₁)²)`
+
+The net segment pressure change is the Darcy–Weisbach friction loss plus hydrostatic elevation head:
+
+`ΔP_net = f × (L_3D / D) × ρv² / 2 + ρg(Z₂ − Z₁)`
+
+Positive Z change therefore consumes pressure; a descent recovers static head. Density is evaluated with the same Peng–Robinson screening method used for friction.
 
 Hydraulic basis:
 
 - 8,000 full-flow operating hours per year;
 - inlet pressure 110 bar;
-- minimum sink-arrival pressure 85 bar;
+- minimum pressure anywhere on every source-to-sink path 85 bar;
+- maximum screened pressure 120 bar;
 - maximum velocity 2.5 m/s;
 - Peng–Robinson mixture EOS for density and compressibility at the segment representative pressure;
 - transport temperature 35 °C;
@@ -132,17 +147,21 @@ Hydraulic basis:
 - Darcy–Weisbach pressure loss and Swamee–Jain friction factor;
 - estimated leakage `0.02% per 100 km` of segment throughput.
 
-Pipeline diameter is based on flow during the 8,000 operating hours, not a 365-day average. For each candidate diameter, PR density and Z are iterated at an estimated segment-mean pressure before Darcy–Weisbach loss is evaluated. Segments are upsized until every source-to-sink path satisfies both velocity and cumulative pressure-drop limits.
+Pipeline diameter is based on flow during the 8,000 operating hours, not a 365-day average. For each candidate diameter, PR density and Z are iterated at an estimated segment-mean pressure before Darcy–Weisbach loss is evaluated. Segments are upsized until every source-to-sink path satisfies velocity, minimum-pressure and maximum-pressure limits. A trajectory that cannot meet these constraints with DN 100–600 is rejected with a route/booster revision message.
+
+All source export stations are screened at a maximum 110 bar inlet. Connected paths can predict different uncontrolled pressures at the same junction; the model reports the maximum pressure-matching requirement and uses the lowest path pressure for feasibility. Metering/throttling is treated as part of the source connection allowance. A detailed network solver, control-valve sizing and compression-power study are required if the pressure spread is material.
 
 The source and sink ledgers remain expressed as tonnes of CO₂. For hydraulics, that CO₂ flow is divided by the PR mixture's CO₂ mass fraction to obtain total stream mass flow. This correction is material for lower-purity comparison cases and prevents a 95 mol-% product from being treated as if the whole transported stream were pure CO₂. Trace H₂O, NOₓ, SOₓ and CO are screened for quality/safety but are not separate PR components; they are included in the dry inert balance at this level. A detailed phase-envelope warning is raised for customized compositions that miss the external benchmark or fall below its CO₂ target.
 
-The installed-cost correlation is anchored at €1.9 million/km for DN 300, scaled with diameter exponent 1.20. It includes a €5 million connection allowance per active source. A 2% fixed O&M factor is applied.
+The installed-cost correlation is anchored at €1.9 million/km for DN 300, scaled with diameter exponent 1.20. It includes a €5 million connection allowance per costed source route. A 2% fixed O&M factor is applied.
+
+Each user-defined route is marked either **new/costed** or **existing/construction excluded**. An existing route remains in the physical calculation: its length, elevation, aggregated flow, diameter screen, pressure change, leakage, transport work and use-phase LCA are retained. Its construction CAPEX, fixed O&M, source connection allowance, new-project steel inventory, material embodied-carbon delta and construction LCA are set to zero. This treatment represents a sunk asset made available without a transport tariff; a tariff or refurbishment cost must be added when relevant.
 
 Reference: https://www.netl.doe.gov/projects/files/QualityGuidelinesforEnergySystemStudiesCarbonDioxideTransportandStorageCostsinNETLStudies_073124.pdf
 
 ### 5.1 Pipeline-material decision screen
 
-The dashboard compares X65, X70, X80, low-carbon X65 and 13Cr corrosion-resistant alloy on the **same optimized topology and hydraulic internal diameters**. This isolates the first-order material trade-off and prevents network changes from obscuring the comparison.
+The dashboard compares X65, X70, X80, low-carbon X65 and 13Cr corrosion-resistant alloy on the **same selected topology and hydraulic internal diameters**. Only new/costed segments enter the project material comparison; existing segments retain physical hydraulics but are not procured again. This isolates the first-order material trade-off and prevents network changes from obscuring the comparison.
 
 The pressure wall is screened with the Barlow relation:
 
@@ -201,7 +220,7 @@ Pipeline leakage is already deducted when calculating received CO₂. The engine
 
 ## 7. Environmental study
 
-The environmental layer is a screening assessment attached to every scenario. It reports annual capture and purification electricity, capture steam demand, direct pipeline leakage, and a transport lifecycle climate burden based on annual tonne-kilometres. The dense-pipeline use-phase factor is interpolated by assessment year from the existing project LCA trajectory; the default 2030 value is 3.0 g CO₂-eq/tkm. A separate 1.2 g CO₂-eq/tkm construction factor is included.
+The environmental layer is a screening assessment attached to every scenario. It reports annual capture and purification electricity, capture steam demand, direct pipeline leakage, and a transport lifecycle climate burden based on annual tonne-kilometres. The dense-pipeline use-phase factor is interpolated by assessment year from the existing project LCA trajectory; the default 2030 value is 3.0 g CO₂-eq/tkm and applies to every operating segment. A separate 1.2 g CO₂-eq/tkm construction factor applies only to new/costed segments.
 
 The environmental lifecycle net avoided CO₂ is:
 

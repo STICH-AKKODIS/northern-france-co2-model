@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 
 from .model import load_model_inputs, run_scenario
@@ -19,6 +20,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--scenario", default="announced_2030", help="Scenario name from config/model.toml.")
     parser.add_argument("--all-scenarios", action="store_true", help="Run every configured scenario and write a comparison.")
     parser.add_argument("--output-dir", type=Path, default=None, help="Output root (default: <root>/outputs).")
+    parser.add_argument(
+        "--trajectory-json",
+        type=Path,
+        default=None,
+        help="Optional v0.7 trajectory JSON exported by the dashboard.",
+    )
     return parser
 
 
@@ -27,11 +34,20 @@ def main(argv: list[str] | None = None) -> None:
     inputs = load_model_inputs(args.root)
     output_root = (args.output_dir or inputs.root / "outputs").resolve()
     scenario_names = list(inputs.config["scenarios"]) if args.all_scenarios else [args.scenario]
+    trajectory_overrides = (
+        json.loads(args.trajectory_json.read_text(encoding="utf-8-sig"))
+        if args.trajectory_json
+        else None
+    )
 
     results = []
     for scenario_name in scenario_names:
         print(f"Running scenario: {scenario_name}")
-        result = run_scenario(inputs, scenario_name)
+        result = run_scenario(
+            inputs,
+            scenario_name,
+            trajectory_overrides=trajectory_overrides,
+        )
         write_scenario_outputs(inputs, result, output_root / scenario_name)
         results.append(result)
         summary = result.summary

@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import math
 import sys
 from pathlib import Path
+from dataclasses import replace
 from typing import Any
 
 import pandas as pd
@@ -15,6 +18,12 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
+from north_co2_model.trajectory_import import (
+    distance_to_source,
+    parse_route_csv,
+    oriented_xyz_vertices,
+    via_points_for_source,
+)
 from north_co2_model.model import (
     ModelInputs,
     ScenarioResult,
@@ -108,6 +117,7 @@ def calculate_case(
     project_life: int,
     pipeline_material: str,
     source_overrides_json: str,
+    trajectory_overrides_json: str,
 ) -> ScenarioResult:
     return run_custom_scenario(
         get_inputs(),
@@ -123,6 +133,7 @@ def calculate_case(
         },
         transport_overrides={"pipeline_material": pipeline_material},
         source_overrides=json.loads(source_overrides_json),
+        trajectory_overrides=json.loads(trajectory_overrides_json),
         scenario_name=scenario_name,
     )
 
@@ -172,6 +183,71 @@ def standard_parameters(inputs: ModelInputs, scenario_id: str) -> dict[str, Any]
         "flow_basis": case["flow_basis"],
         "sink_capacity_tpy": float(case["sink_capacity_tpy"]),
         "enforce_capacity": bool(case["enforce_sink_capacity"]),
+    }
+
+
+def ensure_trajectory_state(inputs: ModelInputs, active_ids: tuple[str, ...]) -> None:
+    """Keep trajectory widgets stable as the selected scenario changes."""
+
+    st.session_state.setdefault("trajectory_mode_enabled", False)
+    st.session_state.setdefault("trajectory_sink_z_m", 0.0)
+    st.session_state.setdefault("trajectory_applied_source_ids", ())
+    if (
+        st.session_state.trajectory_mode_enabled
+        and not set(active_ids).issubset(st.session_state.trajectory_applied_source_ids)
+    ):
+        # Changing the scenario must never silently create straight-line routes
+        # for newly active sources that have no imported CSV geometry.
+        st.session_state.trajectory_mode_enabled = False
+    for source in inputs.sources:
+        source_id = source.source_id
+        st.session_state.setdefault(f"trajectory_source_z_{source_id}", 0.0)
+        st.session_state.setdefault(f"trajectory_destination_{source_id}", "SINK")
+        st.session_state.setdefault(f"trajectory_connection_{source_id}", 0)
+        st.session_state.setdefault(f"trajectory_cost_{source_id}", True)
+        st.session_state.setdefault(f"trajectory_points_{source_id}", [])
+        destination_key = f"trajectory_destination_{source_id}"
+        destination = st.session_state[destination_key]
+        if source_id in active_ids and destination not in {"SINK", *active_ids}:
+            st.session_state[destination_key] = "SINK"
+        if destination == source_id:
+            st.session_state[destination_key] = "SINK"
+
+
+def trajectory_payload_from_state(active_ids: tuple[str, ...]) -> dict[str, Any]:
+    routes: dict[str, Any] = {}
+    for source_id in active_ids:
+        destination = str(
+            st.session_state.get(f"trajectory_destination_{source_id}", "SINK")
+        )
+        if destination == source_id or destination not in {"SINK", *active_ids}:
+            destination = "SINK"
+        target_points = (
+            st.session_state.get(f"trajectory_points_{destination}", [])
+            if destination != "SINK"
+            else []
+        )
+        connection_index = int(
+            st.session_state.get(f"trajectory_connection_{source_id}", 0)
+        )
+        connection_index = min(max(connection_index, 0), len(target_points))
+        routes[source_id] = {
+            "source_z_m": float(
+                st.session_state.get(f"trajectory_source_z_{source_id}", 0.0)
+            ),
+            "destination": destination,
+            "connection_point_index": connection_index,
+            "include_in_cost": bool(
+                st.session_state.get(f"trajectory_cost_{source_id}", True)
+            ),
+            "via_points": list(
+                st.session_state.get(f"trajectory_points_{source_id}", [])
+            ),
+        }
+    return {
+        "enabled": bool(st.session_state.get("trajectory_mode_enabled", False)),
+        "sink_z_m": float(st.session_state.get("trajectory_sink_z_m", 0.0)),
+        "routes": routes,
     }
 
 
@@ -363,27 +439,78 @@ def pipeline_figure(inputs: ModelInputs, result: ScenarioResult) -> go.Figure:
     fig = go.Figure()
 
     for segment in result.pipeline_segments:
-        x1, y1 = coordinates[segment["from_node"]]
-        x2, y2 = coordinates[segment["to_node"]]
+        if "from_x_l93_m" in segment:
+            x1 = float(segment["from_x_l93_m"]) / 1000.0
+            y1 = float(segment["from_y_l93_m"]) / 1000.0
+            x2 = float(segment["to_x_l93_m"]) / 1000.0
+            y2 = float(segment["to_y_l93_m"]) / 1000.0
+        else:
+            x1, y1 = coordinates[segment["from_node"]]
+            x2, y2 = coordinates[segment["to_node"]]
         destination = "Port of Dunkerque" if segment["to_node"] == "SINK" else segment["to_name"]
+        cost_status = (
+            "Included in project cost"
+            if segment.get("include_in_cost", True)
+            else "Existing asset · construction cost excluded"
+        )
         hover = (
             f"<b>{segment['from_name']} → {destination}</b><br>"
             f"Route: {segment['route_length_km']:.1f} km<br>"
+            f"Elevation change: {segment.get('elevation_change_m', 0.0):+.1f} m<br>"
             f"Flow: {segment['flow_tpy'] / 1e6:.3f} Mt/y<br>"
             f"Diameter: DN {segment['nominal_diameter_mm']:.0f}<br>"
             f"Material: {segment['pipeline_material_label']}<br>"
             f"Screened wall: {segment['wall_thickness_mm']:.1f} mm<br>"
             f"Velocity: {segment['velocity_m_per_s']:.2f} m/s<br>"
-            f"Pressure drop: {segment['pressure_drop_bar']:.2f} bar<extra></extra>"
+            f"Friction: {segment.get('friction_pressure_drop_bar', segment['pressure_drop_bar']):.2f} bar<br>"
+            f"Static head: {segment.get('elevation_pressure_change_bar', 0.0):+.2f} bar<br>"
+            f"Net pressure change: {segment['pressure_drop_bar']:.2f} bar<br>"
+            f"{cost_status}<extra></extra>"
         )
         fig.add_trace(
             go.Scatter(
                 x=[x1, x2],
                 y=[y1, y2],
                 mode="lines",
-                line={"color": COLORS["transport"], "width": 2.2 + segment["nominal_diameter_mm"] / 90.0},
+                line={
+                    "color": COLORS["transport"] if segment.get("include_in_cost", True) else "#64748B",
+                    "width": 2.2 + segment["nominal_diameter_mm"] / 90.0,
+                    "dash": "solid" if segment.get("include_in_cost", True) else "dash",
+                },
                 hovertemplate=hover,
                 showlegend=False,
+            )
+        )
+
+    trajectory_points: dict[str, tuple[float, float, float, str]] = {}
+    for segment in result.pipeline_segments:
+        if "from_x_l93_m" not in segment:
+            continue
+        for prefix in ("from", "to"):
+            node_id = str(segment[f"{prefix}_node"])
+            if (
+                node_id == "SINK"
+                or node_id in source_lookup
+                or node_id.endswith(":SOURCE")
+            ):
+                continue
+            trajectory_points[node_id] = (
+                float(segment[f"{prefix}_x_l93_m"]) / 1000.0,
+                float(segment[f"{prefix}_y_l93_m"]) / 1000.0,
+                float(segment.get(f"{prefix}_z_m", 0.0)),
+                str(segment[f"{prefix}_name"]),
+            )
+    if trajectory_points:
+        point_values = list(trajectory_points.values())
+        fig.add_trace(
+            go.Scatter(
+                x=[point[0] for point in point_values],
+                y=[point[1] for point in point_values],
+                mode="markers",
+                marker={"size": 8, "symbol": "diamond", "color": "#FFFFFF", "line": {"color": COLORS["transport"], "width": 2}},
+                name="Trajectory / connection point",
+                customdata=[[point[3], point[2]] for point in point_values],
+                hovertemplate="<b>%{customdata[0]}</b><br>Elevation: %{customdata[1]:.1f} m<extra></extra>",
             )
         )
 
@@ -523,6 +650,12 @@ with st.sidebar:
         sink_capacity_tpy = params["sink_capacity_tpy"]
         enforce_capacity = params["enforce_capacity"]
 
+    ensure_trajectory_state(inputs, active_ids)
+    trajectory_overrides = trajectory_payload_from_state(active_ids)
+    trajectory_overrides_json = json.dumps(
+        trajectory_overrides, sort_keys=True, separators=(",", ":")
+    )
+
     source_overrides = source_configuration_controls(inputs, active_ids)
     source_overrides_json = json.dumps(
         source_overrides, sort_keys=True, separators=(",", ":")
@@ -603,13 +736,17 @@ with st.sidebar:
         pipeline_material,
         carbon_value,
         source_overrides_json,
+        trajectory_overrides_json,
+    )
+    trajectory_run_requested = bool(
+        st.session_state.pop("trajectory_run_requested", False)
     )
     run_clicked = st.button(
         "▶  Run selected scenario",
         type="primary",
         width="stretch",
         disabled=not active_ids,
-    )
+    ) or trajectory_run_requested
     st.markdown(
         """
         <div class="scope-note">
@@ -619,26 +756,12 @@ with st.sidebar:
         """,
         unsafe_allow_html=True,
     )
-    st.caption("Version 0.6 · source technology and product-quality configurator")
+    st.caption("Version 0.7.2 · QGIS CSV pipeline trajectory import with optional Z elevation")
 
 if run_clicked or "result" not in st.session_state:
     with st.spinner("Calculating the capture, purification and transport chain…"):
-        calculated_result = calculate_case(
-            meta["id"],
-            active_ids,
-            flow_basis,
-            sink_capacity_tpy,
-            enforce_capacity,
-            electricity_price,
-            steam_price,
-            discount_rate_pct / 100.0,
-            project_life,
-            pipeline_material,
-            source_overrides_json,
-        )
-        st.session_state.result = calculated_result
-        st.session_state.baseline_result = (
-            calculate_case(
+        try:
+            calculated_result = calculate_case(
                 meta["id"],
                 active_ids,
                 flow_basis,
@@ -649,20 +772,44 @@ if run_clicked or "result" not in st.session_state:
                 discount_rate_pct / 100.0,
                 project_life,
                 pipeline_material,
-                "{}",
+                source_overrides_json,
+                trajectory_overrides_json,
             )
-            if calculated_result.summary["customized_source_configurations"] > 0
-            else calculated_result
-        )
-        st.session_state.signature = signature
-        st.session_state.display_label = selected_label
-        st.session_state.display_description = meta["description"]
-        st.session_state.active_ids = active_ids
-        st.session_state.carbon_value = carbon_value
-        st.session_state.run_electricity_price = electricity_price
-        st.session_state.run_steam_price = steam_price
-        st.session_state.run_discount_rate = discount_rate_pct / 100.0
-        st.session_state.run_project_life = project_life
+            st.session_state.result = calculated_result
+            st.session_state.baseline_result = (
+                calculate_case(
+                    meta["id"],
+                    active_ids,
+                    flow_basis,
+                    sink_capacity_tpy,
+                    enforce_capacity,
+                    electricity_price,
+                    steam_price,
+                    discount_rate_pct / 100.0,
+                    project_life,
+                    pipeline_material,
+                    "{}",
+                    trajectory_overrides_json,
+                )
+                if calculated_result.summary["customized_source_configurations"] > 0
+                else calculated_result
+            )
+            st.session_state.signature = signature
+            st.session_state.display_label = selected_label
+            st.session_state.display_description = meta["description"]
+            st.session_state.active_ids = active_ids
+            st.session_state.carbon_value = carbon_value
+            st.session_state.run_electricity_price = electricity_price
+            st.session_state.run_steam_price = steam_price
+            st.session_state.run_discount_rate = discount_rate_pct / 100.0
+            st.session_state.run_project_life = project_life
+            st.session_state.pop("trajectory_run_error", None)
+        except (ValueError, RuntimeError) as exc:
+            st.session_state.trajectory_run_error = str(exc)
+
+if "result" not in st.session_state:
+    st.error(st.session_state.get("trajectory_run_error", "The model could not run."))
+    st.stop()
 
 result: ScenarioResult = st.session_state.result
 baseline_result: ScenarioResult = st.session_state.get("baseline_result", result)
@@ -724,6 +871,11 @@ st.markdown(
 )
 if st.session_state.signature != signature:
     st.info("The controls have changed. Click **Run selected scenario** to update the displayed results.", icon="ℹ️")
+if st.session_state.get("trajectory_run_error"):
+    st.error(
+        "The trajectory was not applied: "
+        + str(st.session_state["trajectory_run_error"])
+    )
 
 stage_columns = st.columns(3, gap="medium")
 with stage_columns[0]:
@@ -750,7 +902,12 @@ with stage_columns[2]:
         3,
         "Transport to sink",
         fmt_mt(summary["sink_received_after_pipeline_leakage_tpy"]),
-        f"{summary['pipeline_route_length_km']:.1f} km · {summary['minimum_arrival_pressure_bar']:.1f} bar arrival · {summary['pipeline_material_label']}",
+        (
+            f"{summary['pipeline_route_length_km']:.1f} km physical "
+            f"({summary['pipeline_costed_route_length_km']:.1f} km costed) · "
+            f"{summary['minimum_network_pressure_bar']:.1f} bar minimum · "
+            f"{summary['pipeline_material_label']}"
+        ),
     )
 
 st.write("")
@@ -784,7 +941,7 @@ kpis[4].metric(
     help="Pipeline product divided by the selected Dunkerque receiving capacity.",
 )
 pressure_margin = (
-    summary["minimum_arrival_pressure_bar"]
+    summary["minimum_network_pressure_bar"]
     - inputs.config["transport"]["minimum_arrival_pressure_bar"]
 )
 kpis[5].metric(
@@ -883,9 +1040,10 @@ tabs = st.tabs(
     [
         "1  Capture",
         "2  Purification",
-        "3  Transport to sink",
-        "4  Environmental study",
-        "5  Decision lab",
+        "3  Pipeline trajectory",
+        "4  Transport to sink",
+        "5  Environmental study",
+        "6  Decision lab",
     ]
 )
 
@@ -1075,26 +1233,456 @@ with tabs[1]:
 with tabs[2]:
     st.markdown(
         """
-        <div class="section-lead"><b>What happens here:</b> pipeline-quality CO₂ enters a dense-phase collection network at 110 bar. The model evaluates every feasible source/sink tree without free junction nodes, aggregates branch flows, selects a standard diameter and checks velocity and cumulative pressure drop to the Dunkerque sink. Density and compressibility are calculated with the Peng–Robinson equation of state from pressure, temperature and mixture composition.</div>
+        <div class="section-lead"><b>Import pipeline trajectories:</b> upload one or more
+        QGIS vertex CSV files, assign each detected route to a CO₂ source, preview
+        the geometry and apply it. The coordinate table is no longer edited manually.</div>
         """,
         unsafe_allow_html=True,
     )
-    transport_kpis = st.columns(6)
+    st.markdown("#### 1. Upload route CSV files")
+    st.caption(
+        "Accepted format: X, Y, id, Rety_Lumbr, vertex_index, vertex_part, "
+        "vertex_part_index, distance, angle; an optional Z column (in metres) is "
+        "read automatically, as are z_m / elevation / altitude fields. "
+        "Coordinates must be Lambert-93 (EPSG:2154) in metres. "
+        "Without Z, elevations default to 0 m. One file may contain multiple routes."
+    )
+    uploads = st.file_uploader(
+        "Choose pipeline route CSV files",
+        type=["csv"],
+        accept_multiple_files=True,
+        key="trajectory_csv_uploads",
+        help="Use your GIS-exported CSV directly; no reformatting is required.",
+    )
+    upload_signature = tuple(
+        (file.name, hashlib.sha256(file.getvalue()).hexdigest()) for file in uploads
+    )
+    if upload_signature != st.session_state.get("trajectory_last_upload_signature", ()):
+        st.session_state.trajectory_last_upload_signature = upload_signature
+        if st.session_state.trajectory_mode_enabled:
+            st.session_state.trajectory_mode_enabled = False
+            st.rerun()
+
+    imported_routes = []
+    import_errors = []
+    for file_index, file in enumerate(uploads):
+        try:
+            parsed = parse_route_csv(file.getvalue(), file.name)
+            # Prefix with file slot/hash to distinguish identical ids in different files.
+            for route in parsed:
+                imported_routes.append(
+                    replace(route, key=f"{file_index}:{upload_signature[file_index][1][:12]}:{route.key}")
+                )
+        except ValueError as exc:
+            import_errors.append(str(exc))
+    for message in import_errors:
+        st.error(message)
+
+    if not uploads:
+        st.info(
+            "Upload your route CSV file to begin. The automatic screening network "
+            "remains in use until you apply a complete imported network."
+        )
+    elif not imported_routes:
+        st.warning("No usable trajectories were found in the uploaded CSV files.")
+    else:
+        st.success(
+            f"Detected {len(imported_routes)} route(s), "
+            f"{sum(len(route.vertices) for route in imported_routes)} vertices "
+            f"in {len(uploads)} file(s). "
+            f"Elevation read for {sum(route.observed_z_count for route in imported_routes)} "
+            f"vertex/vertices; the remaining vertices use Z = 0 m."
+        )
+        st.markdown("#### 2. Assign imported routes to sources")
+        st.caption(
+            "Each route ID is detected automatically. Suggested assignments use "
+            "the distance to source locations; confirm them before applying. "
+            "Choose 'Not used' for a route that does not represent an active source."
+        )
+        source_lookup = {source.source_id: source for source in inputs.sources}
+        active_source_lookup = {
+            source_id: source_lookup[source_id] for source_id in active_ids
+        }
+        assignments = {}
+        suggested_ids = set()
+        for route in imported_routes:
+            assignment_key = "trajectory_assignment_" + hashlib.sha256(
+                route.key.encode("utf-8")
+            ).hexdigest()[:16]
+            if assignment_key not in st.session_state:
+                candidates = sorted(
+                    (
+                        distance_to_source(
+                            route, source.x_l93_m, source.y_l93_m
+                        ),
+                        source_id,
+                    )
+                    for source_id, source in active_source_lookup.items()
+                    if source_id not in suggested_ids
+                )
+                guess = (
+                    candidates[0][1]
+                    if candidates and candidates[0][0] <= 5000
+                    else "UNASSIGNED"
+                )
+                st.session_state[assignment_key] = guess
+                if guess != "UNASSIGNED":
+                    suggested_ids.add(guess)
+            if st.session_state[assignment_key] not in {"UNASSIGNED", *active_ids}:
+                st.session_state[assignment_key] = "UNASSIGNED"
+            left, right = st.columns([1.8, 1.2], gap="medium")
+            with left:
+                st.markdown(f"**{route.name}** · CSV ID `{route.csv_id}`")
+                st.caption(
+                    f"{route.filename} · {len(route.vertices)} points · "
+                    f"{len(route.parts)} part(s) · {route.length_km:.2f} km · "
+                    + (f"Z from '{route.elevation_column}' ({route.observed_z_count} points)"
+                       if route.has_elevation else "No elevation data → Z = 0 m")
+                    + (f" · {route.missing_z_count} blank Z → 0 m"
+                       if route.has_elevation and route.missing_z_count else "")
+                )
+            with right:
+                assigned_source = st.selectbox(
+                    f"Source for CSV route {route.csv_id} ({route.filename})",
+                    options=["UNASSIGNED", *active_ids],
+                    format_func=lambda source_id: (
+                        "Not used"
+                        if source_id == "UNASSIGNED"
+                        else source_display(source_lookup[source_id])
+                    ),
+                    key=assignment_key,
+                )
+            if assigned_source != "UNASSIGNED":
+                assignments.setdefault(assigned_source, []).append(route)
+
+        duplicate_sources = [
+            source_id for source_id, routes in assignments.items() if len(routes) > 1
+        ]
+        missing_sources = [
+            source_id for source_id in active_ids if source_id not in assignments
+        ]
+        if duplicate_sources:
+            st.error(
+                "More than one CSV route is assigned to: "
+                + ", ".join(duplicate_sources)
+                + ". Assign each active source exactly one route."
+            )
+        if missing_sources:
+            st.warning(
+                "No imported route assigned to active source(s): "
+                + ", ".join(missing_sources)
+                + ". Assign all active sources before running the imported network."
+            )
+
+        st.markdown("#### 3. Preview route geometry")
+        fig = go.Figure()
+        for route in imported_routes:
+            for part_index, part in enumerate(route.parts):
+                fig.add_trace(
+                    go.Scatter(
+                        x=[point[0] for point in part],
+                        y=[point[1] for point in part],
+                        customdata=[[z] for z in route.z_parts[part_index]],
+                        mode="lines+markers" if len(part) <= 25 else "lines",
+                        name=f"{route.name} · id {route.csv_id}",
+                        legendgroup=route.key,
+                        showlegend=part_index == 0,
+                        line=dict(width=3),
+                        hovertemplate="X: %{x:.1f} m<br>Y: %{y:.1f} m<br>Z: %{customdata[0]:.2f} m<extra>%{fullData.name}</extra>",
+                    )
+                )
+        for source_id, source in active_source_lookup.items():
+            fig.add_trace(
+                go.Scatter(
+                    x=[source.x_l93_m], y=[source.y_l93_m], mode="markers+text",
+                    text=[source_id], textposition="top center",
+                    name=f"{source_id} source", marker=dict(size=10, symbol="diamond"),
+                )
+            )
+        sink_x = float(inputs.config["sink"]["x_l93_m"])
+        sink_y = float(inputs.config["sink"]["y_l93_m"])
+        fig.add_trace(
+            go.Scatter(
+                x=[sink_x], y=[sink_y], mode="markers+text",
+                text=["Dunkerque"], textposition="top center",
+                name="Receiving site", marker=dict(size=12, symbol="star"),
+            )
+        )
+        fig.update_layout(
+            height=440, margin=dict(l=10, r=10, t=15, b=10),
+            xaxis_title="Lambert-93 X (m)", yaxis_title="Lambert-93 Y (m)",
+            legend=dict(orientation="h", y=-0.24),
+        )
+        fig.update_yaxes(scaleanchor="x", scaleratio=1)
+        st.plotly_chart(fig, width="stretch")
+        st.caption(
+            "The preview shows the original XY route with Z on hover (metres). "
+            "Multipart segments remain visually separate; the solver joins successive "
+            "parts by straight connectors. Source/sink gaps are checked below."
+        )
+
+        assigned = {source_id: routes[0] for source_id, routes in assignments.items() if len(routes) == 1}
+        st.markdown("#### 4. Check connections and apply")
+        st.caption(
+            "By default, each source route continues to the Dunkerque sink. "
+            "For merged pipelines, select a downstream source route; "
+            "the closest vertex on that route becomes the junction automatically."
+        )
+        destinations = {}
+        cost_flags = {}
+        with st.expander("Route connections and existing assets (optional)", expanded=False):
+            for source_id in assigned:
+                row1, row2 = st.columns([1.6, 1], gap="medium")
+                with row1:
+                    endpoint_options = ["SINK", *[x for x in assigned if x != source_id]]
+                    endpoint_key = f"import_destination_{source_id}"
+                    if st.session_state.get(endpoint_key, "SINK") not in endpoint_options:
+                        st.session_state[endpoint_key] = "SINK"
+                    destinations[source_id] = st.selectbox(
+                        f"Endpoint of {source_id}",
+                        options=endpoint_options,
+                        format_func=lambda value: (
+                            "Port of Dunkerque sink" if value == "SINK"
+                            else f"Join {value} at nearest route vertex"
+                        ),
+                        key=f"import_destination_{source_id}",
+                    )
+                with row2:
+                    cost_flags[source_id] = st.checkbox(
+                        f"{source_id} is new / include construction cost",
+                        value=True,
+                        key=f"import_cost_{source_id}",
+                    )
+        # Source nodes use the first oriented CSV elevation. The shared sink
+        # uses its value only when an XYZ route actually terminates at its XY
+        # coordinate; otherwise no measured sink elevation exists (Z = 0).
+        # A shared sink cannot have contradictory measurements.
+        sink_elevation_samples = []
+        for source_id, route in assigned.items():
+            if destinations[source_id] != "SINK" or not route.has_elevation:
+                continue
+            source = source_lookup[source_id]
+            xyz, _ = oriented_xyz_vertices(route, (source.x_l93_m, source.y_l93_m))
+            if math.dist(xyz[-1][:2], (sink_x, sink_y)) <= 0.001:
+                sink_elevation_samples.append((source_id, xyz[-1][2]))
+        sink_z_conflict = bool(sink_elevation_samples) and (
+            max(z for _, z in sink_elevation_samples)
+            - min(z for _, z in sink_elevation_samples) > 0.5
+        )
+        sink_z_m = (
+            float(sink_elevation_samples[0][1]) if sink_elevation_samples else 0.0
+        )
+        if sink_z_conflict:
+            st.error(
+                "The imported 3D routes specify different elevations for the same "
+                "Dunkerque sink: "
+                + ", ".join(f"{source_id}: {z:.2f} m" for source_id, z in sink_elevation_samples)
+                + ". Correct the GIS route elevations before applying."
+            )
+
+        # Defaults also apply if the expander is collapsed (widgets still render).
+        routes_payload = {}
+        import_summary = []
+        connection_warnings = []
+        for source_id, route in assigned.items():
+            source = source_lookup[source_id]
+            destination = destinations[source_id]
+            xyz_oriented, _ = oriented_xyz_vertices(
+                route, (source.x_l93_m, source.y_l93_m)
+            )
+            source_z_m = xyz_oriented[0][2] if route.has_elevation else 0.0
+            target_xy = (sink_x, sink_y)
+            connection_index = 0
+            if destination != "SINK":
+                target = source_lookup[destination]
+                downstream = assigned[destination]
+                downstream_via, _, _, _ = via_points_for_source(
+                    downstream,
+                    (target.x_l93_m, target.y_l93_m),
+                    destination_xy=(sink_x, sink_y)
+                    if destinations[destination] == "SINK" else None,
+                )
+                candidates = [
+                    (float(target.x_l93_m), float(target.y_l93_m)),
+                    *[(p["x_l93_m"], p["y_l93_m"]) for p in downstream_via],
+                ]
+                route_end = route.vertices[-1]
+                # Resolve orientation first: route end is the endpoint farthest from source.
+                if math.dist(route.vertices[-1], (source.x_l93_m, source.y_l93_m)) < math.dist(
+                    route.vertices[0], (source.x_l93_m, source.y_l93_m)
+                ):
+                    route_end = route.vertices[0]
+                connection_index = min(
+                    range(len(candidates)), key=lambda i: math.dist(route_end, candidates[i])
+                )
+                target_xy = candidates[connection_index]
+            via, source_gap_m, destination_gap_m, reversed_route = via_points_for_source(
+                route, (source.x_l93_m, source.y_l93_m), destination_xy=target_xy
+            )
+            routes_payload[source_id] = {
+                "source_z_m": source_z_m,
+                "destination": destination,
+                "connection_point_index": connection_index,
+                "include_in_cost": cost_flags[source_id],
+                "via_points": via,
+            }
+            import_summary.append(
+                {
+                    "Source": source_id,
+                    "CSV route": f"{route.name} (id {route.csv_id})",
+                    "Vertices": len(route.vertices),
+                    "Elevation": (
+                        f"CSV {route.elevation_column} ({route.observed_z_count}/{len(route.vertices)})"
+                        if route.has_elevation else "0 m fallback"
+                    ),
+                    "Z minimum (m)": round(min(v[2] for v in route.xyz_vertices), 2),
+                    "Z maximum (m)": round(max(v[2] for v in route.xyz_vertices), 2),
+                    "CSV 3D length (km)": round(route.length_km, 2),
+                    "Source gap (km)": round(source_gap_m / 1000, 2),
+                    "Endpoint gap (km)": round(destination_gap_m / 1000, 2),
+                    "Connects to": destination if destination != "SINK" else "Dunkerque",
+                    "Direction": "Reversed" if reversed_route else "As CSV",
+                }
+            )
+            if source_gap_m > 250 or destination_gap_m > 250:
+                connection_warnings.append(
+                    f"{source_id}: {source_gap_m / 1000:.2f} km from source "
+                    f"and {destination_gap_m / 1000:.2f} km to endpoint"
+                )
+            if route.part_gaps_km:
+                connection_warnings.append(
+                    f"{source_id}: {len(route.part_gaps_km)} multipart join(s), "
+                    f"gap(s) " + ", ".join(f"{gap:.3f} km" for gap in route.part_gaps_km)
+                )
+        if import_summary:
+            st.dataframe(pd.DataFrame(import_summary), hide_index=True, width="stretch")
+        st.info(
+            "Elevation handling: QGIS Z values (metres) are used for imported vertices "
+            "and the adjacent source node. When Z is absent/NULL, that vertex defaults "
+            "to 0 m. The sink elevation is read from a 3D route ending exactly at "
+            f"the sink if available (current sink Z = {sink_z_m:.2f} m), "
+            "otherwise it defaults to 0 m. Missing source/sink connections are "
+            "straight-line screening assumptions, not surveyed elevations."
+        )
+        if connection_warnings:
+            st.warning("Please review the geometry gaps before applying:\n- " + "\n- ".join(connection_warnings))
+            confirmed = st.checkbox(
+                "I have reviewed the straight-line connectors and multipart joins",
+                key="trajectory_confirm_connections",
+            )
+        else:
+            confirmed = True
+        connection_cycle = False
+        for source_id in assigned:
+            visited = set()
+            current = source_id
+            while current != "SINK":
+                if current in visited:
+                    connection_cycle = True
+                    break
+                visited.add(current)
+                current = destinations[current]
+        if connection_cycle:
+            st.error("Route connections form a cycle. Every route must ultimately reach Dunkerque.")
+        can_apply = (
+            not connection_cycle
+            and not sink_z_conflict
+            and bool(active_ids)
+            and not import_errors
+            and not duplicate_sources
+            and not missing_sources
+            and len(routes_payload) == len(active_ids)
+            and confirmed
+        )
+        buttons = st.columns([1.5, 1.2, 1.1], gap="small")
+        with buttons[0]:
+            if st.button(
+                "Apply imported trajectories and run",
+                type="primary",
+                width="stretch",
+                disabled=not can_apply,
+            ):
+                for source_id, payload in routes_payload.items():
+                    st.session_state[f"trajectory_source_z_{source_id}"] = payload["source_z_m"]
+                    st.session_state[f"trajectory_destination_{source_id}"] = payload["destination"]
+                    st.session_state[f"trajectory_connection_{source_id}"] = payload["connection_point_index"]
+                    st.session_state[f"trajectory_cost_{source_id}"] = payload["include_in_cost"]
+                    st.session_state[f"trajectory_points_{source_id}"] = payload["via_points"]
+                st.session_state.trajectory_sink_z_m = sink_z_m
+                st.session_state.trajectory_applied_source_ids = tuple(active_ids)
+                st.session_state.trajectory_mode_enabled = True
+                st.session_state.trajectory_run_requested = True
+                st.rerun()
+        with buttons[1]:
+            if st.button("Use automatic network", width="stretch"):
+                st.session_state.trajectory_mode_enabled = False
+                st.session_state.trajectory_run_requested = True
+                st.rerun()
+        with buttons[2]:
+            st.download_button(
+                "Download network JSON",
+                json.dumps(
+                    {"enabled": True, "sink_z_m": sink_z_m, "routes": routes_payload},
+                    indent=2, ensure_ascii=False,
+                ).encode("utf-8"),
+                file_name="imported_pipeline_network.json",
+                mime="application/json",
+                width="stretch",
+                disabled=not can_apply,
+            )
+        st.caption(
+            "Current calculation: " + (
+                "Imported CSV network" if summary["transport_network_mode"] == "user_defined_trajectory"
+                else "Automatic least-cost screening network"
+            )
+            + ". The imported network only changes model results after you click Apply."
+        )
+
+with tabs[3]:
+    if summary["transport_network_mode"] == "user_defined_trajectory":
+        transport_explanation = (
+            "The imported Lambert-93 CSV routes form the fixed pipeline network. "
+            "Shared downstream flows are aggregated and standard diameters are "
+            "selected. QGIS Z elevations are used wherever supplied; missing Z "
+            "defaults to 0 m. The hydraulic screening includes both friction "
+            "and the static elevation pressure contribution."
+        )
+    else:
+        transport_explanation = (
+            "The model evaluates every feasible source/sink tree without free junction "
+            "nodes, aggregates branch flows and retains the least-annualized-cost "
+            "feasible screening network."
+        )
+    st.markdown(
+        f"""
+        <div class="section-lead"><b>What happens here:</b> pipeline-quality CO₂ enters the collection network at 110 bar. {transport_explanation} Density and compressibility are calculated with the Peng–Robinson equation of state from pressure, temperature and mixture composition.</div>
+        """,
+        unsafe_allow_html=True,
+    )
+    transport_kpis = st.columns(7)
     diameters = [row["nominal_diameter_mm"] for row in result.pipeline_segments]
     max_velocity = max((row["velocity_m_per_s"] for row in result.pipeline_segments), default=0.0)
-    transport_kpis[0].metric("Indicative route", f"{summary['pipeline_route_length_km']:.1f} km")
-    transport_kpis[1].metric("Pipe sizes", f"DN{min(diameters):.0f}–{max(diameters):.0f}" if diameters else "—")
-    transport_kpis[2].metric("Minimum arrival pressure", f"{summary['minimum_arrival_pressure_bar']:.1f} bar", delta=f"{summary['minimum_arrival_pressure_bar'] - inputs.config['transport']['minimum_arrival_pressure_bar']:.1f} bar margin")
-    transport_kpis[3].metric("Maximum velocity", f"{max_velocity:.2f} m/s")
-    transport_kpis[4].metric(
+    transport_kpis[0].metric("Physical route", f"{summary['pipeline_route_length_km']:.1f} km")
+    transport_kpis[1].metric(
+        "Costed / existing",
+        f"{summary['pipeline_costed_route_length_km']:.1f} / {summary['pipeline_existing_route_length_km']:.1f} km",
+    )
+    transport_kpis[2].metric("Pipe sizes", f"DN{min(diameters):.0f}–{max(diameters):.0f}" if diameters else "—")
+    transport_kpis[3].metric(
+        "Minimum network pressure",
+        f"{summary['minimum_network_pressure_bar']:.1f} bar",
+        delta=f"{summary['minimum_network_pressure_bar'] - inputs.config['transport']['minimum_arrival_pressure_bar']:.1f} bar margin",
+    )
+    transport_kpis[4].metric("Maximum velocity", f"{max_velocity:.2f} m/s")
+    transport_kpis[5].metric(
         "Screened wall",
         f"{summary['pipeline_wall_thickness_min_mm']:.1f}–{summary['pipeline_wall_thickness_max_mm']:.1f} mm",
         help="Barlow pressure-wall screen including configured corrosion allowance and minimum wall; not final code design.",
     )
-    transport_kpis[5].metric(
-        "Indicative steel",
+    transport_kpis[6].metric(
+        "New-project steel",
         f"{summary['pipeline_steel_mass_t'] / 1000:.1f} kt",
-        help="Calculated pipe steel mass for the selected material screen; excludes fittings, valves and facilities.",
+        help="Steel assigned to costed/new segments only. Existing-route physical steel is not assigned to the new project.",
     )
 
     eos_composition = summary["transport_eos_composition_mol_fraction"]
@@ -1112,15 +1700,26 @@ with tabs[2]:
             "The PR EOS still updates density and pressure loss for scenario comparison, but this flag must be cleared before fixing the operating envelope.",
             icon="⚠️",
         )
+    if summary["maximum_connection_pressure_mismatch_bar"] > 0.05:
+        st.info(
+            f"Connected branches require up to {summary['maximum_connection_pressure_mismatch_bar']:.1f} bar of source-side pressure matching. "
+            "The hydraulic feasibility check uses the lowest resulting path pressure; the source connection allowance is assumed to include metering and pressure control.",
+            icon="ℹ️",
+        )
 
     st.plotly_chart(pipeline_figure(inputs, result), width="stretch", config={"displayModeBar": False})
 
     transport_df = pd.DataFrame(
         [
             {
-                "From": row["from_node"],
-                "To": "Dunkerque sink" if row["to_node"] == "SINK" else row["to_node"],
-                "Route (km)": row["route_length_km"],
+                "Owner route": row.get("owner_route_id", row["from_node"]),
+                "Segment": row.get("segment_index", 0),
+                "From": row["from_name"],
+                "To": "Dunkerque sink" if row["to_node"] == "SINK" else row["to_name"],
+                "Asset basis": "New / costed" if row.get("include_in_cost", True) else "Existing / construction excluded",
+                "3D route (km)": row["route_length_km"],
+                "Plan route (km)": row.get("plan_distance_km", row["straight_distance_km"]),
+                "Elevation ΔZ (m)": row.get("elevation_change_m", 0.0),
                 "CO₂ flow (Mt/y)": row["flow_tpy"] / 1e6,
                 "Total stream (Mt/y)": row["total_stream_flow_tpy"] / 1e6,
                 "CO₂ mass fraction": row["co2_mass_fraction"],
@@ -1132,7 +1731,10 @@ with tabs[2]:
                 "PR Z (-)": row["eos_compressibility_factor"],
                 "EOS P-ref (bar)": row["eos_reference_pressure_bar"],
                 "Velocity (m/s)": row["velocity_m_per_s"],
-                "Pressure drop (bar)": row["pressure_drop_bar"],
+                "Friction ΔP (bar)": row.get("friction_pressure_drop_bar", row["pressure_drop_bar"]),
+                "Elevation ΔP (bar)": row.get("elevation_pressure_change_bar", 0.0),
+                "Net ΔP (bar)": row["pressure_drop_bar"],
+                "Minimum P (bar)": row.get("minimum_operating_pressure_bar"),
                 "CAPEX (€m)": row["segment_capex_eur"] / 1e6,
             }
             for row in result.pipeline_segments
@@ -1143,7 +1745,9 @@ with tabs[2]:
         hide_index=True,
         width="stretch",
         column_config={
-            "Route (km)": st.column_config.NumberColumn(format="%.1f"),
+            "3D route (km)": st.column_config.NumberColumn(format="%.3f"),
+            "Plan route (km)": st.column_config.NumberColumn(format="%.3f"),
+            "Elevation ΔZ (m)": st.column_config.NumberColumn(format="%+.1f"),
             "CO₂ flow (Mt/y)": st.column_config.NumberColumn(format="%.3f"),
             "Total stream (Mt/y)": st.column_config.NumberColumn(format="%.3f"),
             "CO₂ mass fraction": st.column_config.ProgressColumn(format="percent", min_value=0.90, max_value=1.0),
@@ -1153,16 +1757,29 @@ with tabs[2]:
             "PR Z (-)": st.column_config.NumberColumn(format="%.4f"),
             "EOS P-ref (bar)": st.column_config.NumberColumn(format="%.1f"),
             "Velocity (m/s)": st.column_config.NumberColumn(format="%.2f"),
-            "Pressure drop (bar)": st.column_config.NumberColumn(format="%.2f"),
+            "Friction ΔP (bar)": st.column_config.NumberColumn(format="%.2f"),
+            "Elevation ΔP (bar)": st.column_config.NumberColumn(format="%+.2f"),
+            "Net ΔP (bar)": st.column_config.NumberColumn(format="%+.2f"),
+            "Minimum P (bar)": st.column_config.NumberColumn(format="%.2f"),
             "CAPEX (€m)": st.column_config.NumberColumn(format="%.1f"),
         },
     )
     with st.expander("How the network is selected"):
-        st.markdown(
-            f"The model evaluated **{summary['candidate_pipeline_trees_evaluated']:,} feasible network trees** for this case. "
-            "For every segment it uses source-specific route uplifts, Peng–Robinson density/compressibility, Darcy–Weisbach pressure loss with a Swamee–Jain friction factor, "
-            "standard nominal diameters, a 2.5 m/s velocity ceiling and an 85 bar minimum arrival pressure. The least annualized-cost feasible tree is retained."
-        )
+        if summary["transport_network_mode"] == "user_defined_trajectory":
+            st.markdown(
+                "The imported topology is fixed: the model does not shorten or reroute it. "
+                "Segment length is calculated from the imported X/Y/Z coordinates (Z = 0 m "
+                "when absent); connected "
+                "source flows are summed on every shared downstream segment. Diameters "
+                "are increased until the 2.5 m/s velocity ceiling, 85 bar minimum network "
+                "pressure and 120 bar design-pressure screen are satisfied."
+            )
+        else:
+            st.markdown(
+                f"The model evaluated **{summary['candidate_pipeline_trees_evaluated']:,} feasible network trees** for this case. "
+                "For every segment it uses source-specific route uplifts, Peng–Robinson density/compressibility, Darcy–Weisbach pressure loss with a Swamee–Jain friction factor, "
+                "standard nominal diameters, a 2.5 m/s velocity ceiling and an 85 bar minimum arrival pressure. The least annualized-cost feasible tree is retained."
+            )
         st.markdown(
             "**Material screen.** Wall thickness uses the Barlow pressure relation at the configured 120 bar design pressure, "
             "with material SMYS, a 0.72 design factor, corrosion allowance, and a 6.4 mm minimum wall. "
@@ -1196,16 +1813,23 @@ with tabs[2]:
             width="stretch",
         )
 
+    route_basis_text = (
+        "The route geometry is imported from GIS CSVs with straight connectors where necessary. "
+        "Supplied QGIS Z values are used; missing Z values default to zero, "
+        "and gaps use straight connectors. No unprovided terrain profile is inferred."
+        if summary["transport_network_mode"] == "user_defined_trajectory"
+        else "The path is an optimized screening topology, not a surveyed right-of-way."
+    )
     st.markdown(
-        """
+        f"""
         <div class="scope-note">
-          <b>Precision boundary:</b> the route is an optimized screening topology, not a surveyed right-of-way. Land ownership, protected areas, road/rail/water crossings, elevation, geotechnics, transient operation, fracture control and material compatibility require FEED studies. The endpoint is the supplied Port of Dunkerque site; downstream terminal and storage activities are excluded.
+          <b>Precision boundary:</b> {route_basis_text} Land ownership, protected areas, road/rail/water crossings, geotechnics, transient operation, fracture control and material compatibility require project engineering. The endpoint is the supplied Port of Dunkerque site; downstream terminal and storage activities are excluded.
         </div>
         """,
         unsafe_allow_html=True,
     )
 
-with tabs[3]:
+with tabs[4]:
     st.markdown(
         """
         <div class="section-lead"><b>What happens here:</b> the model converts the engineering result into an environmental screening study. It combines capture and purification energy emissions, direct pipeline leakage, and tonne-kilometre lifecycle factors for pipeline operation and construction. It also benchmarks pipeline transport against alternative transport modes.</div>
@@ -1287,7 +1911,7 @@ with tabs[3]:
     st.caption(
         f"Assessment year: {summary['environmental_assessment_year']}. "
         "The dense-pipeline factor is compared on a tonne-kilometre basis with alternative transport modes. "
-        "Pipeline construction is included in the pipeline benchmark."
+        "Pipeline construction is included only for segments marked as new/costed."
     )
     benchmark_df = pd.DataFrame(summary["environmental_transport_benchmarks"]).rename(
         columns={
@@ -1326,6 +1950,9 @@ with tabs[3]:
             "climate_burden_kgco2e_per_t_received": summary["environmental_climate_burden_kgco2e_per_t_received"],
             "net_avoidance_efficiency_fraction": summary["environmental_net_avoidance_efficiency_fraction"],
             "annual_tonne_km": summary["environmental_tonne_km_per_year"],
+            "newbuild_annual_tonne_km": summary[
+                "environmental_newbuild_tonne_km_per_year"
+            ],
         }]
     )
     st.download_button(
@@ -1340,13 +1967,14 @@ with tabs[3]:
             f"**Pipeline use-phase climate factor:** {summary['environmental_pipeline_use_factor_gco2e_per_tkm']:.1f} g CO₂-eq/tkm  \n"
             f"**Pipeline construction factor:** {summary['environmental_pipeline_construction_factor_gco2e_per_tkm']:.1f} g CO₂-eq/tkm  \n"
             f"**Annual transport work:** {summary['environmental_tonne_km_per_year'] / 1e9:.3f} billion tkm/y  \n"
+            f"**New-build transport work receiving construction burden:** {summary['environmental_newbuild_tonne_km_per_year'] / 1e9:.3f} billion tkm/y  \n"
             f"**Selected pipe-material embodied carbon:** {summary['environmental_pipeline_material_embodied_carbon_tco2e'] / 1000:.1f} kt CO₂-eq over the material inventory  \n"
             f"**Annualized material delta versus X65:** {summary['environmental_pipeline_material_delta_annualized_tco2e_per_year'] / 1000:.2f} kt CO₂-eq/y"
         )
         for item in summary["environmental_limitations"]:
             st.markdown(f"- {item}")
 
-with tabs[4]:
+with tabs[5]:
     st.markdown(
         """
         <div class="section-lead"><b>Management question:</b> which pipeline material gives the most useful balance of cost, carbon and robustness, and which assumptions move the decision most? The material comparison holds the selected topology and hydraulic diameters fixed so the trade-off remains understandable.</div>

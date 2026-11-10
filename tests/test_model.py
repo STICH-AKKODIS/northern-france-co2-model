@@ -315,6 +315,142 @@ class ModelRegressionTests(unittest.TestCase):
                 source_overrides={"S4": {"capture_rate": 0.98}},
             )
 
+    def test_user_defined_3d_trajectory_aggregates_connected_flow(self) -> None:
+        trajectory = {
+            "enabled": True,
+            "sink_z_m": 5.0,
+            "routes": {
+                "S1": {
+                    "source_z_m": 80.0,
+                    "destination": "SINK",
+                    "include_in_cost": False,
+                    "via_points": [
+                        {
+                            "order": 1,
+                            "label": "J1",
+                            "x_l93_m": 625000.0,
+                            "y_l93_m": 7090000.0,
+                            "z_m": 30.0,
+                        }
+                    ],
+                },
+                "S3": {
+                    "source_z_m": 60.0,
+                    "destination": "S1",
+                    "connection_point_index": 1,
+                    "include_in_cost": True,
+                    "via_points": [
+                        {
+                            "order": 1,
+                            "label": "P1",
+                            "x_l93_m": 630000.0,
+                            "y_l93_m": 7075000.0,
+                            "z_m": 45.0,
+                        }
+                    ],
+                },
+            },
+        }
+        custom = run_custom_scenario(
+            self.inputs,
+            active_source_ids=["S1", "S3"],
+            flow_basis="announced_product",
+            sink_capacity_tpy=1_500_000.0,
+            trajectory_overrides=trajectory,
+        )
+        self.assertEqual(
+            custom.summary["transport_network_mode"], "user_defined_trajectory"
+        )
+        self.assertGreater(custom.summary["pipeline_costed_route_length_km"], 0.0)
+        self.assertGreater(custom.summary["pipeline_existing_route_length_km"], 0.0)
+        self.assertAlmostEqual(
+            custom.summary["pipeline_route_length_km"],
+            custom.summary["pipeline_costed_route_length_km"]
+            + custom.summary["pipeline_existing_route_length_km"],
+            places=8,
+        )
+        shared = next(
+            segment
+            for segment in custom.pipeline_segments
+            if segment["owner_route_id"] == "S1"
+            and segment["segment_index"] == 2
+        )
+        self.assertAlmostEqual(shared["flow_tpy"], 1_410_000.0, places=3)
+        self.assertFalse(shared["include_in_cost"])
+        self.assertEqual(shared["segment_capex_eur"], 0.0)
+        self.assertGreater(shared["gross_segment_capex_eur"], 0.0)
+        self.assertNotEqual(shared["elevation_change_m"], 0.0)
+        self.assertGreater(shared["route_length_km"], shared["plan_distance_km"])
+        self.assertAlmostEqual(
+            shared["pressure_drop_bar"],
+            shared["friction_pressure_drop_bar"]
+            + shared["elevation_pressure_change_bar"],
+            places=10,
+        )
+        self.assertGreater(
+            custom.summary["environmental_tonne_km_per_year"],
+            custom.summary["environmental_newbuild_tonne_km_per_year"],
+        )
+        self.assertGreater(
+            custom.summary["pipeline_network_steel_mass_t"],
+            custom.summary["pipeline_steel_mass_t"],
+        )
+        self.assertGreater(
+            custom.summary["maximum_connection_pressure_mismatch_bar"], 0.0
+        )
+
+    def test_all_existing_trajectory_removes_project_pipeline_capex_and_construction_lca(self) -> None:
+        trajectory = {
+            "enabled": True,
+            "routes": {
+                "S1": {
+                    "destination": "SINK",
+                    "include_in_cost": False,
+                    "via_points": [],
+                }
+            },
+        }
+        custom = run_custom_scenario(
+            self.inputs,
+            active_source_ids=["S1"],
+            flow_basis="irep_2024_total",
+            sink_capacity_tpy=1_500_000.0,
+            trajectory_overrides=trajectory,
+        )
+        self.assertEqual(custom.summary["pipeline_capex_eur"], 0.0)
+        self.assertEqual(custom.summary["pipeline_annual_cost_eur"], 0.0)
+        self.assertEqual(custom.summary["pipeline_costed_source_connections"], 0)
+        self.assertEqual(
+            custom.summary["environmental_newbuild_tonne_km_per_year"], 0.0
+        )
+        self.assertEqual(
+            custom.summary[
+                "environmental_pipeline_construction_emissions_tco2e_per_year"
+            ],
+            0.0,
+        )
+        self.assertGreater(
+            custom.summary["environmental_pipeline_use_emissions_tco2e_per_year"],
+            0.0,
+        )
+
+    def test_trajectory_cycle_is_rejected(self) -> None:
+        trajectory = {
+            "enabled": True,
+            "routes": {
+                "S1": {"destination": "S3", "connection_point_index": 0},
+                "S3": {"destination": "S1", "connection_point_index": 0},
+            },
+        }
+        with self.assertRaisesRegex(ValueError, "contain a cycle"):
+            run_custom_scenario(
+                self.inputs,
+                active_source_ids=["S1", "S3"],
+                flow_basis="announced_product",
+                sink_capacity_tpy=1_500_000.0,
+                trajectory_overrides=trajectory,
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

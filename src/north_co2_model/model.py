@@ -1058,7 +1058,13 @@ def _peng_robinson_properties(
     }
 
 
-def _pipe_hydraulics(flow_tpy: float, length_km: float, diameter_m: float, transport: dict[str, Any]) -> dict[str, float | str]:
+def _pipe_hydraulics(
+    flow_tpy: float,
+    length_km: float,
+    diameter_m: float,
+    transport: dict[str, Any],
+    elevation_change_m: float = 0.0,
+) -> dict[str, float | str]:
     temperature_c = float(transport["temperature_c"])
     composition = {key: float(value) for key, value in transport["eos_composition"].items()}
     inlet_pressure_bar = float(transport["inlet_pressure_bar"])
@@ -1082,6 +1088,8 @@ def _pipe_hydraulics(flow_tpy: float, length_km: float, diameter_m: float, trans
             "velocity_m_per_s": 0.0,
             "reynolds_number": 0.0,
             "darcy_factor": 0.0,
+            "friction_pressure_drop_bar": 0.0,
+            "elevation_pressure_change_bar": 0.0,
             "pressure_drop_bar": 0.0,
             "eos_density_kg_per_m3": props["density_kg_per_m3"],
             "eos_compressibility_factor": props["compressibility_factor"],
@@ -1121,8 +1129,17 @@ def _pipe_hydraulics(flow_tpy: float, length_km: float, diameter_m: float, trans
             * velocity**2
             / 2.0
         )
-        pressure_drop_bar = pressure_drop_pa / 100000.0
-        bounded_drop = min(max(pressure_drop_bar, 0.0), max(pressure_window_bar, 0.0))
+        friction_pressure_drop_bar = pressure_drop_pa / 100000.0
+        elevation_pressure_change_bar = (
+            density * 9.80665 * elevation_change_m / 100000.0
+        )
+        pressure_drop_bar = (
+            friction_pressure_drop_bar + elevation_pressure_change_bar
+        )
+        bounded_drop = min(
+            max(pressure_drop_bar, -pressure_window_bar),
+            max(pressure_window_bar, 0.0),
+        )
         updated_reference = inlet_pressure_bar - 0.5 * bounded_drop
         if abs(updated_reference - reference_pressure_bar) < 1e-5:
             reference_pressure_bar = updated_reference
@@ -1145,11 +1162,19 @@ def _pipe_hydraulics(flow_tpy: float, length_km: float, diameter_m: float, trans
         * velocity**2
         / 2.0
     )
+    friction_pressure_drop_bar = pressure_drop_pa / 100000.0
+    elevation_pressure_change_bar = (
+        density * 9.80665 * elevation_change_m / 100000.0
+    )
     return {
         "velocity_m_per_s": velocity,
         "reynolds_number": reynolds,
         "darcy_factor": darcy,
-        "pressure_drop_bar": pressure_drop_pa / 100000.0,
+        "friction_pressure_drop_bar": friction_pressure_drop_bar,
+        "elevation_pressure_change_bar": elevation_pressure_change_bar,
+        "pressure_drop_bar": (
+            friction_pressure_drop_bar + elevation_pressure_change_bar
+        ),
         "eos_density_kg_per_m3": density,
         "eos_compressibility_factor": props["compressibility_factor"],
         "eos_reference_pressure_bar": reference_pressure_bar,
@@ -1290,14 +1315,28 @@ def _enrich_pipeline_material_summary(
             "pipeline_material_label": str(material.get("label", material_id)),
             "pipeline_material_note": str(material.get("management_note", "")),
             "pipeline_steel_mass_t": sum(
+                float(s.get("project_steel_mass_t", s.get("steel_mass_t", 0.0)))
+                for s in segments
+            ),
+            "pipeline_network_steel_mass_t": sum(
                 float(s.get("steel_mass_t", 0.0)) for s in segments
             ),
             "pipeline_material_embodied_carbon_tco2e": sum(
-                float(s.get("material_embodied_carbon_tco2e", 0.0))
+                float(
+                    s.get(
+                        "project_material_embodied_carbon_tco2e",
+                        s.get("material_embodied_carbon_tco2e", 0.0),
+                    )
+                )
                 for s in segments
             ),
             "pipeline_material_embodied_carbon_delta_tco2e": sum(
-                float(s.get("material_embodied_carbon_delta_tco2e", 0.0))
+                float(
+                    s.get(
+                        "project_material_embodied_carbon_delta_tco2e",
+                        s.get("material_embodied_carbon_delta_tco2e", 0.0),
+                    )
+                )
                 for s in segments
             ),
             "minimum_wall_thickness_mm": min(
@@ -1400,14 +1439,33 @@ def _candidate_tree_result(
                 "from_name": a["name"],
                 "to_name": b["name"],
                 "straight_distance_km": straight,
+                "plan_distance_km": straight,
                 "route_factor": route_factor,
                 "route_length_km": route,
+                "from_x_l93_m": float(a["x"]),
+                "from_y_l93_m": float(a["y"]),
+                "from_z_m": 0.0,
+                "to_x_l93_m": float(b["x"]),
+                "to_y_l93_m": float(b["y"]),
+                "to_z_m": 0.0,
+                "elevation_change_m": 0.0,
+                "owner_route_id": str(a["node_id"]),
+                "segment_index": 0,
+                "include_in_cost": True,
+                "existing_asset": False,
                 "flow_tpy": flow,
                 "nominal_diameter_mm": diameter * 1000.0,
                 **hydraulics[edge],
                 "base_segment_capex_eur": base_capex,
                 "segment_capex_eur": capex,
                 **material_metrics,
+                "project_steel_mass_t": float(material_metrics["steel_mass_t"]),
+                "project_material_embodied_carbon_tco2e": float(
+                    material_metrics["material_embodied_carbon_tco2e"]
+                ),
+                "project_material_embodied_carbon_delta_tco2e": float(
+                    material_metrics["material_embodied_carbon_delta_tco2e"]
+                ),
                 "annualized_segment_capex_eur": annualized_capex,
                 "fixed_opex_eur_per_year": fixed_opex,
                 "segment_annual_cost_eur": segment_annual_cost,
@@ -1431,6 +1489,13 @@ def _candidate_tree_result(
         "straight_length_km": sum(row["straight_distance_km"] for row in segment_rows),
         "maximum_path_pressure_drop_bar": max(path_drops.values(), default=0.0),
         "minimum_arrival_pressure_bar": transport["inlet_pressure_bar"] - max(path_drops.values(), default=0.0),
+        "minimum_network_pressure_bar": transport["inlet_pressure_bar"] - max(path_drops.values(), default=0.0),
+        "maximum_network_pressure_bar": transport["inlet_pressure_bar"],
+        "maximum_connection_pressure_mismatch_bar": 0.0,
+        "costed_route_length_km": sum(row["route_length_km"] for row in segment_rows),
+        "existing_route_length_km": 0.0,
+        "costed_source_connections": len(source_indices),
+        "network_mode": "optimized_screening",
         "objective_eur_per_year": annual_cost,
     }
 
@@ -1450,6 +1515,13 @@ def optimize_pipeline_network(
             "straight_length_km": 0.0,
             "maximum_path_pressure_drop_bar": 0.0,
             "minimum_arrival_pressure_bar": inputs.config["transport"]["inlet_pressure_bar"],
+            "minimum_network_pressure_bar": inputs.config["transport"]["inlet_pressure_bar"],
+            "maximum_network_pressure_bar": inputs.config["transport"]["inlet_pressure_bar"],
+            "maximum_connection_pressure_mismatch_bar": 0.0,
+            "costed_route_length_km": 0.0,
+            "existing_route_length_km": 0.0,
+            "costed_source_connections": 0,
+            "network_mode": "optimized_screening",
             "candidate_trees_evaluated": 0,
         }
 
@@ -1509,6 +1581,568 @@ def optimize_pipeline_network(
     return best
 
 
+def _trajectory_number(value: Any, label: str) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{label} must be a number.") from exc
+    if not math.isfinite(number):
+        raise ValueError(f"{label} must be finite.")
+    return number
+
+
+def _normalise_pipeline_trajectories(
+    inputs: ModelInputs,
+    route_source_ids: Iterable[str],
+    trajectory_overrides: dict[str, Any],
+) -> dict[str, Any]:
+    """Validate and expand user-entered routes into source/via/endpoint points.
+
+    Lambert-93 X/Y coordinates are entered by the user. The first point is always
+    the source coordinate and the last point is resolved automatically to either
+    the sink or a named point on another route. Acyclic route-to-route connections
+    guarantee that every injected stream eventually reaches the sink.
+    """
+
+    source_by_id = {source.source_id: source for source in inputs.sources}
+    route_ids = list(dict.fromkeys(str(value) for value in route_source_ids))
+    unknown_route_ids = sorted(set(route_ids) - set(source_by_id))
+    if unknown_route_ids:
+        raise ValueError(
+            f"Trajectory contains unknown source IDs: {', '.join(unknown_route_ids)}"
+        )
+    raw_routes = trajectory_overrides.get("routes", {})
+    if not isinstance(raw_routes, dict):
+        raise ValueError("Pipeline trajectory routes must be a mapping by source ID.")
+    unknown_override_ids = sorted(set(raw_routes) - set(source_by_id))
+    if unknown_override_ids:
+        raise ValueError(
+            "Pipeline trajectory overrides contain unknown source IDs: "
+            + ", ".join(unknown_override_ids)
+        )
+
+    sink = inputs.config["sink"]
+    sink_z_m = _trajectory_number(
+        trajectory_overrides.get("sink_z_m", 0.0), "Sink elevation"
+    )
+    if not -500.0 <= sink_z_m <= 5000.0:
+        raise ValueError("Sink elevation must be between -500 and 5,000 m.")
+
+    routes: dict[str, dict[str, Any]] = {}
+    for source_id in route_ids:
+        source = source_by_id[source_id]
+        raw = raw_routes.get(source_id, {})
+        if not isinstance(raw, dict):
+            raise ValueError(f"Trajectory route {source_id} must be a mapping.")
+        source_z_m = _trajectory_number(
+            raw.get("source_z_m", 0.0), f"{source_id} source elevation"
+        )
+        if not -500.0 <= source_z_m <= 5000.0:
+            raise ValueError(
+                f"{source_id} source elevation must be between -500 and 5,000 m."
+            )
+        destination = str(raw.get("destination", "SINK")).strip() or "SINK"
+        if destination != "SINK" and destination not in route_ids:
+            raise ValueError(
+                f"{source_id} destination '{destination}' is not an active route or the sink."
+            )
+        if destination == source_id:
+            raise ValueError(f"{source_id} cannot connect to its own route.")
+
+        raw_points = raw.get("via_points", [])
+        if raw_points is None:
+            raw_points = []
+        if not isinstance(raw_points, list):
+            raise ValueError(f"{source_id} via points must be a list.")
+        sortable: list[tuple[float, int, dict[str, Any]]] = []
+        for original_index, raw_point in enumerate(raw_points):
+            if not isinstance(raw_point, dict):
+                raise ValueError(
+                    f"{source_id} via point {original_index + 1} must be a mapping."
+                )
+            order = _trajectory_number(
+                raw_point.get("order", original_index + 1),
+                f"{source_id} via point {original_index + 1} order",
+            )
+            sortable.append((order, original_index, raw_point))
+
+        base_points: list[dict[str, Any]] = [
+            {
+                "node_id": f"{source_id}:SOURCE",
+                "name": f"{source_id} source · {source.source_name}",
+                "x": float(source.x_l93_m),
+                "y": float(source.y_l93_m),
+                "z": source_z_m,
+                "point_type": "source",
+            }
+        ]
+        for point_number, (_, _, raw_point) in enumerate(sorted(sortable), start=1):
+            x = _trajectory_number(
+                raw_point.get("x_l93_m", raw_point.get("x")),
+                f"{source_id} via point {point_number} X",
+            )
+            y = _trajectory_number(
+                raw_point.get("y_l93_m", raw_point.get("y")),
+                f"{source_id} via point {point_number} Y",
+            )
+            z = _trajectory_number(
+                raw_point.get("z_m", raw_point.get("z", 0.0)),
+                f"{source_id} via point {point_number} Z",
+            )
+            if not 0.0 <= x <= 1_300_000.0 or not 5_900_000.0 <= y <= 7_400_000.0:
+                raise ValueError(
+                    f"{source_id} via point {point_number} is outside the Lambert-93 "
+                    "screening bounds. Enter X/Y in metres (EPSG:2154), not longitude/latitude."
+                )
+            if not -500.0 <= z <= 5000.0:
+                raise ValueError(
+                    f"{source_id} via point {point_number} elevation must be between -500 and 5,000 m."
+                )
+            label = str(raw_point.get("label", "")).strip() or f"P{point_number}"
+            base_points.append(
+                {
+                    "node_id": f"{source_id}:P{point_number}",
+                    "name": f"{source_id} · {label}",
+                    "x": x,
+                    "y": y,
+                    "z": z,
+                    "point_type": "via",
+                }
+            )
+
+        routes[source_id] = {
+            "source_id": source_id,
+            "source_name": source.source_name,
+            "destination": destination,
+            "connection_point_index": int(raw.get("connection_point_index", 0)),
+            "include_in_cost": bool(raw.get("include_in_cost", True)),
+            "source_z_m": source_z_m,
+            "base_points": base_points,
+        }
+
+    dependency = nx.DiGraph()
+    dependency.add_nodes_from(route_ids)
+    for source_id, route in routes.items():
+        destination = route["destination"]
+        if destination != "SINK":
+            dependency.add_edge(source_id, destination)
+    if not nx.is_directed_acyclic_graph(dependency):
+        cycle = nx.find_cycle(dependency)
+        cycle_text = " → ".join(edge[0] for edge in cycle) + f" → {cycle[0][0]}"
+        raise ValueError(
+            f"Pipeline trajectory connections contain a cycle ({cycle_text}). "
+            "Every route must ultimately reach the sink."
+        )
+
+    maximum_edge_length_km = float(
+        inputs.config["transport"]["maximum_edge_length_km"]
+    )
+    for source_id, route in routes.items():
+        destination = route["destination"]
+        if destination == "SINK":
+            endpoint = {
+                "node_id": "SINK",
+                "name": str(sink["name"]),
+                "x": float(sink["x_l93_m"]),
+                "y": float(sink["y_l93_m"]),
+                "z": sink_z_m,
+                "point_type": "sink",
+            }
+        else:
+            target_points = routes[destination]["base_points"]
+            connection_index = route["connection_point_index"]
+            if connection_index < 0 or connection_index >= len(target_points):
+                raise ValueError(
+                    f"{source_id} connection point {connection_index} does not exist on "
+                    f"route {destination}. Add the point to {destination} first or choose another point."
+                )
+            endpoint = dict(target_points[connection_index])
+        points = [dict(point) for point in route["base_points"]] + [endpoint]
+        for index, (start, end) in enumerate(zip(points, points[1:]), start=1):
+            dx = float(end["x"]) - float(start["x"])
+            dy = float(end["y"]) - float(start["y"])
+            dz = float(end["z"]) - float(start["z"])
+            length_km = math.sqrt(dx * dx + dy * dy + dz * dz) / 1000.0
+            if length_km <= 1e-6:
+                raise ValueError(
+                    f"{source_id} segment {index} has zero length. Remove or move the duplicated point."
+                )
+            if length_km > maximum_edge_length_km:
+                raise ValueError(
+                    f"{source_id} segment {index} is {length_km:.1f} km, above the "
+                    f"configured {maximum_edge_length_km:.1f} km screening limit. Add intermediate points."
+                )
+        route["points"] = points
+
+    return {"sink_z_m": sink_z_m, "routes": routes}
+
+
+def _trajectory_path_segments(
+    source_id: str, routes: dict[str, dict[str, Any]]
+) -> list[tuple[str, int]]:
+    path: list[tuple[str, int]] = []
+    current = source_id
+    start_index = 0
+    while True:
+        route = routes[current]
+        path.extend(
+            (current, index)
+            for index in range(start_index, len(route["points"]) - 1)
+        )
+        destination = route["destination"]
+        if destination == "SINK":
+            return path
+        start_index = int(route["connection_point_index"])
+        current = destination
+
+
+def build_pipeline_from_trajectories(
+    inputs: ModelInputs,
+    source_results: list[dict[str, Any]],
+    route_source_ids: Iterable[str],
+    trajectory_overrides: dict[str, Any],
+) -> dict[str, Any]:
+    """Size and cost the fixed 3D pipeline geometry supplied by the user."""
+
+    normalised = _normalise_pipeline_trajectories(
+        inputs, route_source_ids, trajectory_overrides
+    )
+    routes = normalised["routes"]
+    transport = inputs.config["transport"]
+    finance = inputs.config["finance"]
+    local_flows = {
+        str(row["source_id"]): float(row["allocated_product_co2_tpy"])
+        for row in source_results
+        if str(row["source_id"]) in routes
+        and float(row["allocated_product_co2_tpy"]) > 0.0
+    }
+    if not local_flows:
+        inlet = float(transport["inlet_pressure_bar"])
+        return {
+            "segments": [],
+            "pipeline_capex_eur": 0.0,
+            "pipeline_annual_cost_eur": 0.0,
+            "pipeline_leakage_tpy": 0.0,
+            "route_length_km": 0.0,
+            "straight_length_km": 0.0,
+            "maximum_path_pressure_drop_bar": 0.0,
+            "minimum_arrival_pressure_bar": inlet,
+            "minimum_network_pressure_bar": inlet,
+            "maximum_network_pressure_bar": inlet,
+            "maximum_connection_pressure_mismatch_bar": 0.0,
+            "costed_route_length_km": 0.0,
+            "existing_route_length_km": 0.0,
+            "costed_source_connections": 0,
+            "network_mode": "user_defined_trajectory",
+            "candidate_trees_evaluated": 1,
+            "trajectory_route_count": len(routes),
+            "trajectory_sink_z_m": normalised["sink_z_m"],
+        }
+
+    segment_definitions: dict[tuple[str, int], dict[str, Any]] = {}
+    for owner_id, route in routes.items():
+        for index, (start, end) in enumerate(
+            zip(route["points"], route["points"][1:])
+        ):
+            dx = float(end["x"]) - float(start["x"])
+            dy = float(end["y"]) - float(start["y"])
+            dz = float(end["z"]) - float(start["z"])
+            plan_km = math.hypot(dx, dy) / 1000.0
+            route_km = math.sqrt(dx * dx + dy * dy + dz * dz) / 1000.0
+            segment_definitions[(owner_id, index)] = {
+                "owner_route_id": owner_id,
+                "segment_index": index + 1,
+                "from_point": start,
+                "to_point": end,
+                "plan_distance_km": plan_km,
+                "route_length_km": route_km,
+                "elevation_change_m": dz,
+                "include_in_cost": bool(route["include_in_cost"]),
+            }
+
+    source_paths = {
+        source_id: _trajectory_path_segments(source_id, routes)
+        for source_id in local_flows
+    }
+    segment_flows = {key: 0.0 for key in segment_definitions}
+    for source_id, path in source_paths.items():
+        for key in path:
+            segment_flows[key] += local_flows[source_id]
+    active_keys = [key for key, flow in segment_flows.items() if flow > 0.0]
+
+    diameter_options = [
+        float(value) / 1000.0 for value in transport["diameter_candidates_mm"]
+    ]
+    diameter_index: dict[tuple[str, int], int] = {}
+    hydraulics: dict[tuple[str, int], dict[str, Any]] = {}
+    for key in active_keys:
+        definition = segment_definitions[key]
+        selected_index: int | None = None
+        selected_values: dict[str, Any] | None = None
+        for index, diameter in enumerate(diameter_options):
+            values = _pipe_hydraulics(
+                segment_flows[key],
+                definition["route_length_km"],
+                diameter,
+                transport,
+                definition["elevation_change_m"],
+            )
+            if float(values["velocity_m_per_s"]) <= float(
+                transport["maximum_velocity_m_per_s"]
+            ):
+                selected_index = index
+                selected_values = values
+                break
+        if selected_index is None or selected_values is None:
+            raise RuntimeError(
+                f"No configured diameter satisfies the velocity limit on "
+                f"{key[0]} segment {key[1] + 1}."
+            )
+        diameter_index[key] = selected_index
+        hydraulics[key] = selected_values
+
+    inlet_pressure = float(transport["inlet_pressure_bar"])
+    minimum_pressure = float(transport["minimum_arrival_pressure_bar"])
+    maximum_pressure = float(transport.get("design_pressure_bar", inlet_pressure))
+
+    def pressure_profiles() -> dict[str, dict[str, Any]]:
+        profiles: dict[str, dict[str, Any]] = {}
+        for source_id, path in source_paths.items():
+            cumulative_drop = 0.0
+            pressures = [inlet_pressure]
+            for key in path:
+                cumulative_drop += float(hydraulics[key]["pressure_drop_bar"])
+                pressures.append(inlet_pressure - cumulative_drop)
+            profiles[source_id] = {
+                "path": path,
+                "pressures": pressures,
+                "arrival_pressure_bar": pressures[-1],
+                "minimum_pressure_bar": min(pressures),
+                "maximum_pressure_bar": max(pressures),
+            }
+        return profiles
+
+    for _ in range(max(len(active_keys) * len(diameter_options) + 1, 2)):
+        profiles = pressure_profiles()
+        network_maximum = max(
+            profile["maximum_pressure_bar"] for profile in profiles.values()
+        )
+        if network_maximum > maximum_pressure + 1e-9:
+            offending_source = max(
+                profiles, key=lambda value: profiles[value]["maximum_pressure_bar"]
+            )
+            raise RuntimeError(
+                f"The {offending_source} trajectory reaches {network_maximum:.1f} bar, "
+                f"above the {maximum_pressure:.1f} bar design-pressure screen. "
+                "Revise the elevation profile or add pressure-control facilities."
+            )
+        network_minimum = min(
+            profile["minimum_pressure_bar"] for profile in profiles.values()
+        )
+        if network_minimum >= minimum_pressure - 1e-9:
+            break
+        worst_source = min(
+            profiles, key=lambda value: profiles[value]["minimum_pressure_bar"]
+        )
+        candidates = [
+            key
+            for key in profiles[worst_source]["path"]
+            if diameter_index[key] < len(diameter_options) - 1
+        ]
+        if not candidates:
+            raise RuntimeError(
+                f"The {worst_source} trajectory falls to {network_minimum:.1f} bar and "
+                "cannot meet the minimum-pressure constraint with the configured diameters. "
+                "Revise the route or add a booster/compression station."
+            )
+        target = max(
+            candidates,
+            key=lambda value: float(
+                hydraulics[value]["friction_pressure_drop_bar"]
+            ),
+        )
+        diameter_index[target] += 1
+        definition = segment_definitions[target]
+        hydraulics[target] = _pipe_hydraulics(
+            segment_flows[target],
+            definition["route_length_km"],
+            diameter_options[diameter_index[target]],
+            transport,
+            definition["elevation_change_m"],
+        )
+    else:
+        raise RuntimeError("Trajectory hydraulic sizing did not converge.")
+
+    profiles = pressure_profiles()
+    pressure_observations: dict[tuple[str, int], list[float]] = {
+        key: [] for key in active_keys
+    }
+    node_pressure_observations: dict[str, list[float]] = {}
+    for profile in profiles.values():
+        for index, key in enumerate(profile["path"]):
+            definition = segment_definitions[key]
+            start_node = str(definition["from_point"]["node_id"])
+            end_node = str(definition["to_point"]["node_id"])
+            node_pressure_observations.setdefault(start_node, []).append(
+                profile["pressures"][index]
+            )
+            node_pressure_observations.setdefault(end_node, []).append(
+                profile["pressures"][index + 1]
+            )
+            pressure_observations[key].extend(
+                [profile["pressures"][index], profile["pressures"][index + 1]]
+            )
+    maximum_connection_pressure_mismatch = max(
+        (max(values) - min(values) for values in node_pressure_observations.values()),
+        default=0.0,
+    )
+
+    crf = capital_recovery_factor(
+        float(finance["discount_rate"]), int(finance["project_life_years"])
+    )
+    segment_rows: list[dict[str, Any]] = []
+    total_capex = 0.0
+    annual_cost = 0.0
+    total_leakage = 0.0
+    for key in active_keys:
+        definition = segment_definitions[key]
+        diameter = diameter_options[diameter_index[key]]
+        route_km = float(definition["route_length_km"])
+        plan_km = float(definition["plan_distance_km"])
+        capex_per_km = float(transport["capex_eur_per_km_at_300mm"]) * (
+            diameter / 0.3
+        ) ** float(transport["diameter_cost_exponent"])
+        gross_base_capex = capex_per_km * route_km
+        material_metrics = _pipe_material_metrics(diameter, route_km, transport)
+        gross_capex = gross_base_capex * float(
+            material_metrics["material_capex_multiplier"]
+        )
+        include_in_cost = bool(definition["include_in_cost"])
+        capex = gross_capex if include_in_cost else 0.0
+        base_capex = gross_base_capex if include_in_cost else 0.0
+        fixed_opex = capex * float(transport["fixed_opex_fraction"])
+        annualized_capex = capex * crf
+        segment_annual_cost = annualized_capex + fixed_opex
+        leakage = (
+            segment_flows[key]
+            * float(transport["co2_leakage_fraction_per_100km"])
+            * route_km
+            / 100.0
+        )
+        total_capex += capex
+        annual_cost += segment_annual_cost
+        total_leakage += leakage
+        start = definition["from_point"]
+        end = definition["to_point"]
+        observations = pressure_observations[key]
+        segment_rows.append(
+            {
+                "from_node": start["node_id"],
+                "to_node": end["node_id"],
+                "from_name": start["name"],
+                "to_name": end["name"],
+                "owner_route_id": definition["owner_route_id"],
+                "segment_index": definition["segment_index"],
+                "straight_distance_km": plan_km,
+                "plan_distance_km": plan_km,
+                "route_factor": route_km / plan_km if plan_km > 0.0 else 1.0,
+                "route_length_km": route_km,
+                "from_x_l93_m": float(start["x"]),
+                "from_y_l93_m": float(start["y"]),
+                "from_z_m": float(start["z"]),
+                "to_x_l93_m": float(end["x"]),
+                "to_y_l93_m": float(end["y"]),
+                "to_z_m": float(end["z"]),
+                "elevation_change_m": float(definition["elevation_change_m"]),
+                "include_in_cost": include_in_cost,
+                "existing_asset": not include_in_cost,
+                "flow_tpy": segment_flows[key],
+                "nominal_diameter_mm": diameter * 1000.0,
+                **hydraulics[key],
+                "minimum_operating_pressure_bar": min(observations),
+                "maximum_operating_pressure_bar": max(observations),
+                "gross_base_segment_capex_eur": gross_base_capex,
+                "gross_segment_capex_eur": gross_capex,
+                "base_segment_capex_eur": base_capex,
+                "segment_capex_eur": capex,
+                **material_metrics,
+                "project_steel_mass_t": (
+                    float(material_metrics["steel_mass_t"])
+                    if include_in_cost
+                    else 0.0
+                ),
+                "project_material_embodied_carbon_tco2e": (
+                    float(material_metrics["material_embodied_carbon_tco2e"])
+                    if include_in_cost
+                    else 0.0
+                ),
+                "project_material_embodied_carbon_delta_tco2e": (
+                    float(material_metrics["material_embodied_carbon_delta_tco2e"])
+                    if include_in_cost
+                    else 0.0
+                ),
+                "annualized_segment_capex_eur": annualized_capex,
+                "fixed_opex_eur_per_year": fixed_opex,
+                "segment_annual_cost_eur": segment_annual_cost,
+                "estimated_co2_leakage_tpy": leakage,
+            }
+        )
+
+    costed_source_connections = sum(
+        routes[source_id]["include_in_cost"] for source_id in local_flows
+    )
+    connection_capex = costed_source_connections * float(
+        transport["source_connection_capex_eur"]
+    )
+    total_capex += connection_capex
+    annual_cost += connection_capex * (
+        crf + float(transport["fixed_opex_fraction"])
+    )
+    minimum_arrival = min(
+        profile["arrival_pressure_bar"] for profile in profiles.values()
+    )
+    minimum_network = min(
+        profile["minimum_pressure_bar"] for profile in profiles.values()
+    )
+    maximum_network = max(
+        profile["maximum_pressure_bar"] for profile in profiles.values()
+    )
+    segment_rows.sort(
+        key=lambda row: (str(row["owner_route_id"]), int(row["segment_index"]))
+    )
+    return {
+        "segments": segment_rows,
+        "pipeline_capex_eur": total_capex,
+        "pipeline_annual_cost_eur": annual_cost,
+        "pipeline_leakage_tpy": total_leakage,
+        "route_length_km": sum(row["route_length_km"] for row in segment_rows),
+        "straight_length_km": sum(
+            row["straight_distance_km"] for row in segment_rows
+        ),
+        "costed_route_length_km": sum(
+            row["route_length_km"]
+            for row in segment_rows
+            if row["include_in_cost"]
+        ),
+        "existing_route_length_km": sum(
+            row["route_length_km"]
+            for row in segment_rows
+            if not row["include_in_cost"]
+        ),
+        "costed_source_connections": int(costed_source_connections),
+        "maximum_path_pressure_drop_bar": inlet_pressure - minimum_network,
+        "minimum_arrival_pressure_bar": minimum_arrival,
+        "minimum_network_pressure_bar": minimum_network,
+        "maximum_network_pressure_bar": maximum_network,
+        "maximum_connection_pressure_mismatch_bar": maximum_connection_pressure_mismatch,
+        "objective_eur_per_year": annual_cost,
+        "network_mode": "user_defined_trajectory",
+        "candidate_trees_evaluated": 1,
+        "trajectory_route_count": len(routes),
+        "trajectory_sink_z_m": normalised["sink_z_m"],
+    }
+
+
 def _blended_transport_composition(
     source_results: list[dict[str, Any]],
     base_composition: dict[str, float],
@@ -1550,6 +2184,7 @@ def run_scenario(
     inputs: ModelInputs,
     scenario_name: str,
     source_overrides: dict[str, dict[str, Any]] | None = None,
+    trajectory_overrides: dict[str, Any] | None = None,
 ) -> ScenarioResult:
     if scenario_name not in inputs.config["scenarios"]:
         raise KeyError(f"Unknown scenario: {scenario_name}")
@@ -1569,7 +2204,15 @@ def run_scenario(
         capture_technologies=inputs.capture_technologies,
         purification_technologies=inputs.purification_technologies,
     )
-    pipeline = optimize_pipeline_network(calculation_inputs, source_results)
+    if trajectory_overrides and bool(trajectory_overrides.get("enabled", False)):
+        pipeline = build_pipeline_from_trajectories(
+            calculation_inputs,
+            source_results,
+            scenario["active_source_ids"],
+            trajectory_overrides,
+        )
+    else:
+        pipeline = optimize_pipeline_network(calculation_inputs, source_results)
     _enrich_pipeline_material_summary(pipeline, calculation_config["transport"])
 
     total_allocated = sum(row["allocated_product_co2_tpy"] for row in source_results)
@@ -1692,6 +2335,7 @@ def run_scenario(
         "pipeline_material_label": pipeline["pipeline_material_label"],
         "pipeline_material_note": pipeline["pipeline_material_note"],
         "pipeline_steel_mass_t": pipeline["pipeline_steel_mass_t"],
+        "pipeline_network_steel_mass_t": pipeline["pipeline_network_steel_mass_t"],
         "pipeline_material_embodied_carbon_tco2e": pipeline[
             "pipeline_material_embodied_carbon_tco2e"
         ],
@@ -1719,8 +2363,19 @@ def run_scenario(
         ),
         "pipeline_route_length_km": pipeline["route_length_km"],
         "pipeline_straight_length_km": pipeline["straight_length_km"],
+        "pipeline_costed_route_length_km": pipeline["costed_route_length_km"],
+        "pipeline_existing_route_length_km": pipeline["existing_route_length_km"],
+        "pipeline_costed_source_connections": pipeline[
+            "costed_source_connections"
+        ],
+        "transport_network_mode": pipeline["network_mode"],
         "maximum_path_pressure_drop_bar": pipeline["maximum_path_pressure_drop_bar"],
         "minimum_arrival_pressure_bar": pipeline["minimum_arrival_pressure_bar"],
+        "minimum_network_pressure_bar": pipeline["minimum_network_pressure_bar"],
+        "maximum_network_pressure_bar": pipeline["maximum_network_pressure_bar"],
+        "maximum_connection_pressure_mismatch_bar": pipeline[
+            "maximum_connection_pressure_mismatch_bar"
+        ],
         "candidate_pipeline_trees_evaluated": pipeline["candidate_trees_evaluated"],
         "transport_equation_of_state": "Peng-Robinson",
         "transport_eos_temperature_c": float(calculation_config["transport"]["temperature_c"]),
@@ -1768,7 +2423,11 @@ def build_material_comparison(
     crf = capital_recovery_factor(
         float(finance["discount_rate"]), int(finance["project_life_years"])
     )
-    source_connections = int(result.summary["active_sources"])
+    source_connections = int(
+        result.summary.get(
+            "pipeline_costed_source_connections", result.summary["active_sources"]
+        )
+    )
     connection_capex = source_connections * float(
         transport["source_connection_capex_eur"]
     )
@@ -1791,6 +2450,8 @@ def build_material_comparison(
         embodied_delta = 0.0
         wall_values: list[float] = []
         for segment in result.pipeline_segments:
+            if not bool(segment.get("include_in_cost", True)):
+                continue
             metrics = _pipe_material_metrics(
                 float(segment["nominal_diameter_mm"]) / 1000.0,
                 float(segment["route_length_km"]),
@@ -1865,8 +2526,8 @@ def build_material_comparison(
                 "annual_value_headroom_eur": annual_value_headroom,
                 "simple_payback_years": payback,
                 "calculation_basis": (
-                    "Same optimized topology and hydraulic diameters; "
-                    "material-sensitive cost and embodied-carbon screen."
+                    "Same selected topology and hydraulic diameters; only new/costed "
+                    "segments enter the material-sensitive cost and embodied-carbon screen."
                 ),
             }
         )
@@ -1883,6 +2544,7 @@ def run_custom_scenario(
     finance_overrides: dict[str, float] | None = None,
     transport_overrides: dict[str, str] | None = None,
     source_overrides: dict[str, dict[str, Any]] | None = None,
+    trajectory_overrides: dict[str, Any] | None = None,
     scenario_name: str = "custom_case",
 ) -> ScenarioResult:
     """Run a UI-defined case without changing any files on disk."""
@@ -1938,7 +2600,12 @@ def run_custom_scenario(
         capture_technologies=inputs.capture_technologies,
         purification_technologies=inputs.purification_technologies,
     )
-    return run_scenario(custom_inputs, scenario_name, source_overrides)
+    return run_scenario(
+        custom_inputs,
+        scenario_name,
+        source_overrides,
+        trajectory_overrides,
+    )
 
 
 def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:

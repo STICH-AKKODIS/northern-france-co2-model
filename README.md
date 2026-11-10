@@ -2,7 +2,7 @@
 
 A point-and-click model for presenting the northern industrial CO₂ chain to technical and non-technical audiences.
 
-**Current release: v0.6 — per-source capture/purification configuration and dynamic impact assessment.**
+**Current release: v0.7.3 — 2D/3D QGIS CSV trajectory import with automatic Z elevation, and existing-asset cost treatment.**
 
 The model has three physical engineering sections plus an environmental-study layer:
 
@@ -37,12 +37,14 @@ No command-line knowledge is required.
 
 1. Start with **Announced projects · 2030**. This is the most defensible base case because it uses the named CalCC and K6 project flows.
 2. Open each source under **Source technology & targets**. Capture and purification technologies, capture efficiency, purification recovery, CO₂ purity, H₂O, O₂, NOₓ, SOₓ and CO can be set independently.
-3. Click **Run selected scenario**. The model recalculates the complete mass, energy, cost, emissions, product-quality, safety-screen and hydraulic result.
-4. Use the three engineering cards to explain the flow from captured CO₂ to purified product to Dunkerque receipt, then open the environmental study.
-5. Read the independent **Executive decision gates**; a red gate is not hidden by a composite score.
-6. Open the **Capture**, **Purification**, **Transport to sink**, **Environmental study** and **Decision lab** tabs in order.
-7. In the Decision lab, compare the selected source configurations and pipeline-material cost/carbon trade-off.
-8. Switch to **Verified 2024 cluster potential** to discuss the wider regional opportunity and its larger uncertainty.
+3. Optionally change the economic and pipeline-material assumptions.
+4. In **Pipeline trajectory**, import one or more QGIS-style route CSVs in Lambert-93 (X/Y, optionally Z in metres; absent Z defaults to 0 m). Assign detected route IDs to active sources, preview the routes, optionally connect routes and mark existing assets, then apply the imported network.
+5. Click **Apply imported trajectories and run** (or use **Run selected scenario** to rerun the applied network). The model recalculates the complete mass, energy, cost, emissions, product-quality, safety-screen and hydraulic result.
+6. Use the three engineering cards to explain the flow from captured CO₂ to purified product to Dunkerque receipt, then open the environmental study.
+7. Read the independent **Executive decision gates**; a red gate is not hidden by a composite score.
+8. Open the **Capture**, **Purification**, **Pipeline trajectory**, **Transport to sink**, **Environmental study** and **Decision lab** tabs in order.
+9. In the Decision lab, compare the selected source configurations and pipeline-material cost/carbon trade-off.
+10. Switch to **Verified 2024 cluster potential** to discuss the wider regional opportunity and its larger uncertainty.
 
 See `docs/USER_GUIDE.md` for a short facilitator guide.
 
@@ -98,6 +100,10 @@ These are screening/pre-FEED estimates, not vendor quotations or a routed constr
 ### Transport
 
 - every feasible source/sink network tree without free junction nodes, up to 1,296 topologies;
+- an alternative fixed-trajectory mode loaded from QGIS vertex CSV files (automatic route-ID detection, order and multipart handling, source mapping, preview and gap warnings);
+- route endpoints at the sink or at a selected source/via point on another pipeline, with cycle validation and automatic shared-flow aggregation;
+- three-dimensional segment length and hydrostatic elevation head in addition to Darcy–Weisbach friction;
+- independent new/existing status by source route: existing assets remain in hydraulics, leakage and operating LCA, while project CAPEX, fixed O&M, connection allowance, new steel and construction LCA are excluded;
 - flow aggregation, standard diameter selection and route uplifts;
 - Peng–Robinson EOS density/compressibility at 35 °C using a flow-weighted CO₂/N₂/O₂/Ar composition built from the selected source-product targets;
 - impurity-corrected total stream mass flow for velocity and pressure-loss calculations while CO₂ accounting remains on a CO₂-mass basis;
@@ -155,6 +161,7 @@ Python 3.11 or newer is required.
 ```powershell
 python -m pip install -r requirements.txt
 python run_model.py --all-scenarios
+python run_model.py --scenario announced_2030 --trajectory-json pipeline_trajectories.json
 $env:PYTHONPATH = "src"
 python -m unittest discover -s tests -v
 ```
@@ -174,3 +181,16 @@ python -m unittest discover -s tests -v
 - DNV-RP-F104 CO₂ pipeline design and operation: https://www.dnv.com/energy/standards-guidelines/dnv-rp-f104-design-and-operation-of-carbon-dioxide-pipelines/
 - worldsteel 2024 GHG intensity screening anchor: https://worldsteel.org/wider-sustainability/sustainability-indicators/
 - JRC industrial capture assessment: https://publications.jrc.ec.europa.eu/repository/handle/JRC146193
+
+## Run tests
+
+Install the model's dependencies before exercising the interactive dashboard:
+
+```bash
+python -m pip install -r requirements.txt
+python -m unittest discover -s tests -v
+```
+
+The trajectory-import and calculation tests run without Streamlit. If Streamlit is
+not available, the UI smoke tests are **skipped** rather than producing a
+misleading import error; installing Streamlit enables the full interactive checks.
