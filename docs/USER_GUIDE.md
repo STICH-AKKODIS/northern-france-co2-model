@@ -9,13 +9,14 @@ Keep the small model window open during the presentation. Close it when finished
 ## Run a scenario
 
 1. Choose a scenario in the left panel.
-2. Under **Source technology & targets**, open any selected source. Choose its capture technology and efficiency independently, then choose its purification technology, recovery, CO₂ purity and H₂O target. Enable the advanced component control to set O₂, NOₓ, SOₓ and CO.
-3. Optionally open **Economic sensitivity** and change electricity price, steam price, discount rate or project life.
-4. Open **Management and pipeline choices** to select a material screen and the CO₂-value / avoided-cost threshold used for the management comparison.
-5. Open **Pipeline trajectory** and upload one or more QGIS vertex CSVs. The importer detects multiple routes by `id`, sorts their vertices and displays a preview.
-6. Assign each active CO₂ source to one imported route. Optionally, connect a route to a downstream route and mark existing assets (exclude their construction cost). Review any straight-line connector or multipart warnings and confirm.
-7. Click **Apply imported trajectories and run**. Use **Run selected scenario** to recalculate the currently applied network, or **Use automatic network** to return to the original optimization.
-8. Wait for the scenario title and values to update.
+2. Choose **Process-linked engineering model** for v0.8.0, or **Legacy screening coefficients** for an exact v0.7.3 comparison.
+3. Under **Source technology & targets**, open any selected source. Choose its capture technology and efficiency independently, then choose its purification technology, recovery, CO₂ purity and H₂O target. Enable advanced controls for product O₂, NOₓ, SOₓ and CO. In process-linked mode, **Adjust capture-feed composition** exposes source CO₂, H₂O, O₂, SOₓ, NOₓ and CO.
+4. Optionally open **Economic sensitivity** and change electricity price, steam price, discount rate or project life.
+5. Open **Management and pipeline choices** to select a material screen and the CO₂-value / avoided-cost threshold used for the management comparison.
+6. Open **Pipeline trajectory** and upload one or more QGIS vertex CSVs. The importer detects multiple routes by `id`, sorts their vertices and displays a preview.
+7. Assign each active CO₂ source to one imported route. Optionally, connect a route to a downstream route and mark existing assets (exclude their construction cost). Review any straight-line connector or multipart warnings and confirm.
+8. Click **Apply imported trajectories and run**. Use **Run selected scenario** to recalculate the currently applied network, or **Use automatic network** to return to the original optimization.
+9. Wait for the scenario title and values to update.
 
 Changing a control does not silently change the displayed results. The dashboard shows a message until **Run selected scenario** is clicked.
 
@@ -23,8 +24,8 @@ Changing a control does not silently change the displayed results. The dashboard
 
 Start with the three cards:
 
-- **Capture** shows how much CO₂ is separated and its capture CAPEX/cost.
-- **Purification** shows specification-compliant pipeline product and recovery.
+- **Capture** shows how much CO₂ is separated, the method, utilities, solvent makeup, wet-product quality and capture CAPEX/cost.
+- **Purification** shows the connected wet feed, recovery loss, achieved product, compression/heat/cooling and conditioning cost.
 - **Transport to sink** shows how much reaches Dunkerque, the network length and minimum pressure.
 
 Read the **Executive decision gates**, then open the six tabs in order. The gates are independent: economics cannot compensate for an unresolved product-quality or hydraulic concern.
@@ -35,9 +36,9 @@ Use the emissions-versus-captured chart to explain that whole-site emissions are
 
 ### Purification tab
 
-Use the feed/product metrics to explain the 99.5% recovery. The quality table covers six modeled components. State clearly that a complete vendor assay is still required.
+Use the feed/product metrics to explain recovery. Open **Connected stage handoff and balance checks** to show that the capture wet product is the purification inlet and the achieved purification product is the pipeline feed. The quality table covers six modeled components.
 
-The economics and transport calculation remains visible when a selected product misses the external benchmark so that alternatives can be compared. The row and executive gate are marked **FAIL/Amber**; this is not the same as receiver acceptance. Targets outside the selected technology's configured range are rejected rather than extrapolated.
+The economics and transport calculation remains visible when a selected product misses the external benchmark so that alternatives can be compared. The row and executive gate are marked **FAIL/Amber**. If purity and trace targets cannot be formed from the available feed, the process-linked model reports the achievable product rather than inventing inert gas and adds a feasibility flag. Targets outside the selected technology's configured range are rejected rather than extrapolated.
 
 ### Pipeline trajectory tab
 
@@ -76,4 +77,4 @@ Each engineering tab provides a CSV download. The Environmental study tab provid
 
 ## Recommended starting statement
 
-> This is a screening/pre-FEED decision model. It keeps capture, purification and Peng–Robinson pipeline transport separate, reconciles their mass and cost accounts, and adds an environmental climate/energy screening layer. The physical chain ends when CO₂ reaches the supplied Port of Dunkerque site.
+> This is a process-linked engineering/pre-FEED decision model with a selectable legacy screen. It transmits flow and composition between capture, purification and Peng–Robinson pipeline transport, reconciles mass, energy and cost, and adds an environmental climate/energy layer. The physical chain ends when CO₂ reaches the supplied Port of Dunkerque site.

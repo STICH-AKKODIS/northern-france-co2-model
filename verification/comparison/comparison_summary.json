@@ -1,0 +1,32 @@
+{
+  "reference_file": "verification/papa_reference/reference_case.json",
+  "matched_basis": {
+    "capture_feed": {
+      "CO2": 0.14,
+      "N2": 0.698014,
+      "O2": 0.04,
+      "H2O": 0.11,
+      "Ar": 0.0093,
+      "SO2": 3.5e-05,
+      "NO": 0.0001,
+      "NO2": 4.6e-05,
+      "CO": 0.0025,
+      "H2S": 5e-06
+    },
+    "capture_capacity_tpy": 747469.1848792597,
+    "capture_rate": 0.9245457657803854,
+    "operating_hours_per_year": 8000,
+    "pipeline_delivery_pressure_bar": 110.0,
+    "discount_rate": 0.08,
+    "project_life_years": 25,
+    "electricity_price_eur_per_mwh": 165.0,
+    "capture_steam_price_eur_per_gj": 7.0,
+    "purification_thermal_price_eur_per_mwh": 72.0
+  },
+  "limitations": [
+    "Papa's capture model is stagewise and closes lean-loading recycle; the improved interface uses an analytical multi-source surrogate with the same energy terms.",
+    "Papa's purification trains resolve individual unit operations and species; the interface aggregates them into configurable train families while preserving the wet-feed handoff, component balance and utility boundaries.",
+    "Exact agreement is not expected where unit sizing, trace chemistry, refrigerant treatment or consumable inventories differ.",
+    "The matched comparison is a numerical cross-check, not independent experimental validation."
+  ]
+}

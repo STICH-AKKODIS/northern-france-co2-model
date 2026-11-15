@@ -1,0 +1,6 @@
+mode,assessment_year,mode_gco2e_per_tkm,pipeline_gco2e_per_tkm_including_construction,pipeline_intensity_reduction_fraction,avoided_transport_emissions_tco2e_per_year
+Truck (diesel),2030,148.5,4.2,0.9717171717171718,12011.223091083672
+Truck (electric),2030,139.5,4.2,0.9698924731182795,11262.08235775205
+Truck (H2),2030,144.0,4.2,0.9708333333333333,11636.652724417861
+Barge (diesel),2030,88.2,4.2,0.9523809523809523,6991.980177761805
+Train (electric),2030,64.8,4.2,0.9351851851851851,5044.214271099588

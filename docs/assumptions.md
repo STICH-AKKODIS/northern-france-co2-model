@@ -1,5 +1,7 @@
 # Engineering basis, equations and uncertainty
 
+> **v0.8.0 calculation note:** the default calculation is now `process_linked`. Its equations, component handoffs, compression boundary and technology-family assumptions are documented in `docs/PROCESS_MODEL_METHODS.md`. The piecewise capture and purification severity multipliers described below remain active only when **Legacy screening coefficients** is selected; they are preserved to reproduce the v0.7.3 comparison boundary.
+
 ## 1. Model boundary
 
 The engineering chain contains three physical sections, with a fourth environmental-study layer in the dashboard:

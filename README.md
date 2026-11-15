@@ -2,7 +2,7 @@
 
 A point-and-click model for presenting the northern industrial CO₂ chain to technical and non-technical audiences.
 
-**Current release: v0.7.3 — 2D/3D QGIS CSV trajectory import with automatic Z elevation, and existing-asset cost treatment.**
+**Current release: v0.8.0 — connected process engineering for capture and purification, with the v0.7.3 screening calculation retained as a selectable baseline.**
 
 The model has three physical engineering sections plus an environmental-study layer:
 
@@ -15,13 +15,13 @@ Liquefaction, shipping, injection and geological storage are outside the calcula
 
 ## Open the interface
 
-### Online — no installation required
+### Hosted application
 
 Open the hosted Streamlit application:
 
 **https://northern-france-co2-model-sdam99xt44plsenyvgd8jk.streamlit.app/**
 
-Anyone with this link can use the interface from a modern web browser. If the application is sleeping, the first opening can take a short time while Streamlit starts it.
+The hosted application follows the deployed GitHub branch. The local feature branch described in this document must be merged/deployed before the hosted link reflects v0.8.0.
 
 ### Local Windows launch
 
@@ -36,15 +36,15 @@ No command-line knowledge is required.
 ## Recommended presentation workflow
 
 1. Start with **Announced projects · 2030**. This is the most defensible base case because it uses the named CalCC and K6 project flows.
-2. Open each source under **Source technology & targets**. Capture and purification technologies, capture efficiency, purification recovery, CO₂ purity, H₂O, O₂, NOₓ, SOₓ and CO can be set independently.
-3. Optionally change the economic and pipeline-material assumptions.
-4. In **Pipeline trajectory**, import one or more QGIS-style route CSVs in Lambert-93 (X/Y, optionally Z in metres; absent Z defaults to 0 m). Assign detected route IDs to active sources, preview the routes, optionally connect routes and mark existing assets, then apply the imported network.
-5. Click **Apply imported trajectories and run** (or use **Run selected scenario** to rerun the applied network). The model recalculates the complete mass, energy, cost, emissions, product-quality, safety-screen and hydraulic result.
-6. Use the three engineering cards to explain the flow from captured CO₂ to purified product to Dunkerque receipt, then open the environmental study.
-7. Read the independent **Executive decision gates**; a red gate is not hidden by a composite score.
-8. Open the **Capture**, **Purification**, **Pipeline trajectory**, **Transport to sink**, **Environmental study** and **Decision lab** tabs in order.
-9. In the Decision lab, compare the selected source configurations and pipeline-material cost/carbon trade-off.
-10. Switch to **Verified 2024 cluster potential** to discuss the wider regional opportunity and its larger uncertainty.
+2. Keep **Process-linked engineering model** selected for the integrated calculation, or select **Legacy screening coefficients** for the exact v0.7.3 comparison boundary.
+3. Open each source under **Source technology & targets**. Capture and purification technologies, capture efficiency, purification recovery, CO₂ purity, H₂O, O₂, NOₓ, SOₓ and CO can be set independently. Advanced capture-feed controls expose source CO₂/H₂O/O₂/SOₓ/NOₓ/CO assumptions.
+4. Optionally change the economic and pipeline-material assumptions.
+5. In **Pipeline trajectory**, import one or more QGIS-style route CSVs in Lambert-93 (X/Y, optionally Z in metres; absent Z defaults to 0 m). Assign detected route IDs to active sources, preview the routes, optionally connect routes and mark existing assets, then apply the imported network.
+6. Click **Apply imported trajectories and run** (or use **Run selected scenario** to rerun the applied network). The model recalculates the connected mass, composition, energy, cost, emissions, safety and hydraulic result.
+7. Use the capture/purification handoff table to show that the wet capture product is the purification feed and the achieved purified product is the transport feed.
+8. Read the independent **Executive decision gates**; a red gate is not hidden by a composite score.
+9. Open the **Capture**, **Purification**, **Pipeline trajectory**, **Transport to sink**, **Environmental study** and **Decision lab** tabs in order.
+10. In the Decision lab, compare source configurations and pipeline-material cost/carbon trade-offs, then switch to **Verified 2024 cluster potential** for the wider regional opportunity.
 
 See `docs/USER_GUIDE.md` for a short facilitator guide.
 
@@ -65,17 +65,17 @@ The current `announced_2030` base case estimates:
 - 1.417 MtCO₂/y captured;
 - 1.410 MtCO₂/y purified for transport;
 - 1.410 MtCO₂/y received at Dunkerque after modeled leakage;
-- 1.383 MtCO₂/y net avoided within the three-stage boundary;
+- 1.373 MtCO₂/y net avoided within the three-stage boundary;
 - 93.8 km indicative collection routing;
 - DN 200 screening pipe sizes;
 - 90.2 bar minimum arrival pressure;
-- €618.0 million three-stage CAPEX;
-- €82.2/t received base annualized cost;
-- €59.8–104.5/t received maturity-weighted screening range;
-- 1.382 MtCO₂/y lifecycle net avoided in the environmental screening;
-- 19.6 kg CO₂-eq/t received modeled climate-burden intensity.
+- €701.3 million three-stage CAPEX;
+- €82.6/t received base annualized cost;
+- €60.1–105.1/t received maturity-weighted screening range;
+- 1.372 MtCO₂/y lifecycle net avoided in the environmental screening;
+- 26.8 kg CO₂-eq/t received modeled climate-burden intensity.
 
-These are screening/pre-FEED estimates, not vendor quotations or a routed construction design.
+These are process-linked engineering/pre-FEED estimates, not vendor quotations or a routed construction design. The exact regenerated outputs are recorded in `verification/process_linked/`.
 
 ## What the calculations include
 
@@ -83,18 +83,22 @@ These are screening/pre-FEED estimates, not vendor quotations or a routed constr
 
 - source-specific capturable fraction, unit capture rate and availability;
 - independently selectable sector-compatible Cryocap, oxyfuel/Cryocap, conventional amine, dilute-gas amine and DMX technology mappings;
-- technology-specific feasible capture-rate ranges, with target-dependent energy, CAPEX and OPEX interpolation;
-- scaled CAPEX, annualized capital, fixed O&M, consumables, electricity and steam;
-- capture-energy emissions.
+- an explicit wet-product composition and handoff to purification;
+- MEA cyclic-capacity, reaction/sensible/vaporisation heat, blower/pump work and O₂/SOₓ-dependent degradation for MEA-family options only;
+- separate cryogenic, oxyfuel and DMX technology-family responses;
+- scaled CAPEX, annualized capital, fixed O&M, solvent/water, electricity, steam and cooling;
+- utility, consumable and annualized-equipment emissions.
 
 ### Purification
 
 - independent recovery and mass loss;
 - independently selectable dehydration, molecular-sieve, cryogenic, non-condensable-removal and membrane-hybrid trains;
 - adjustable recovery, CO₂ purity, H₂O, O₂, NOₓ, SOₓ and CO targets within technology-specific ranges;
-- target-dependent purification energy, CAPEX and OPEX;
-- dehydration, polishing and compression to 110 bar;
-- independent CAPEX, OPEX and electricity;
+- component-conserving feed/product/side-stream balances and achieved composition;
+- bulk-water knockout before residual TEG or molecular-sieve regeneration;
+- multistage compression to 110 bar, deoxygenation, thermal duty, refrigeration and cooling where applicable;
+- independent CAPEX, fixed/variable OPEX, electricity, heat, cooling, hydrogen and sorbents;
+- visible feasibility flags when purity and trace limits cannot coexist with the available feed;
 - screening against six published product-quality limits, plus a qualitative technology/quality safety screen.
 
 ### Transport
@@ -105,7 +109,7 @@ These are screening/pre-FEED estimates, not vendor quotations or a routed constr
 - three-dimensional segment length and hydrostatic elevation head in addition to Darcy–Weisbach friction;
 - independent new/existing status by source route: existing assets remain in hydraulics, leakage and operating LCA, while project CAPEX, fixed O&M, connection allowance, new steel and construction LCA are excluded;
 - flow aggregation, standard diameter selection and route uplifts;
-- Peng–Robinson EOS density/compressibility at 35 °C using a flow-weighted CO₂/N₂/O₂/Ar composition built from the selected source-product targets;
+- Peng–Robinson EOS density/compressibility at 35 °C using the flow-weighted achieved dry purification products;
 - impurity-corrected total stream mass flow for velocity and pressure-loss calculations while CO₂ accounting remains on a CO₂-mass basis;
 - Darcy–Weisbach pressure loss and Swamee–Jain friction;
 - velocity and minimum-arrival-pressure constraints;
@@ -146,10 +150,13 @@ The model also corrects the legacy endpoint coordinate and uses Lambert-93 consi
 | `ui/` | Dashboard and presentation theme |
 | `src/north_co2_model/` | Engineering model and reports |
 | `config/model.toml` | Finance, pipeline, sink and scenario settings |
-| `config/technologies.toml` | Capture/purification options, feasible ranges, cost/energy interpolation and hazard notes |
+| `config/technologies.toml` | Capture/purification process families, physical defaults, feasible ranges, costs and hazards |
+| `config/process_sources.toml` | Editable source-side composition and condition assumptions |
 | `data/` | Active source inventory and quality limits |
-| `docs/` | Assumptions, data quality and user guide |
+| `docs/` | Process equations, comparison report, assumptions, data quality and user guide |
 | `tests/` | Regression checks |
+| `scripts/` | Local Papa execution, matched-input comparison and full verification runner |
+| `verification/` | Baseline, reference, comparison and process-linked numerical evidence |
 | `outputs/` | Reproducible scenario reports and maps |
 
 Superseded legacy prototypes, duplicate workbooks and stale output folders have been removed from the active project.
@@ -164,6 +171,11 @@ python run_model.py --all-scenarios
 python run_model.py --scenario announced_2030 --trajectory-json pipeline_trajectories.json
 $env:PYTHONPATH = "src"
 python -m unittest discover -s tests -v
+python scripts/run_papa_reference.py
+python scripts/compare_papa_models.py
+python scripts/compare_release_outputs.py
+# Or run the complete sequence in PowerShell:
+.\scripts\run_full_verification.ps1 -Python python -PapaReferenceRoot "C:\path\to\preserved_papa_models"
 ```
 
 ## Primary public references

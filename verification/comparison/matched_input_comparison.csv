@@ -1,0 +1,22 @@
+stage,train,metric,unit,papa_reference,improved_matched,improved_vs_papa_pct,legacy_screening,legacy_vs_papa_pct,interpretation
+Capture,MEA,CO2 capture efficiency,%,92.45457657803854,92.45457657803854,0.0,92.45457657803854,0.0,Identical operating target.
+Capture,MEA,Wet raw-product CO2,mol-%,95.41638291721924,95.40632503800754,-0.010541040127696405,,,Connected composition calculated from absorber/stripper trace transfer and condensation.
+Capture,MEA,Electricity,kWh/t captured CO2,7.288868928883998,7.825068710658294,7.356419590006177,30.0,311.5864929484102,Blower and solvent-pump work replace a fixed coefficient.
+Capture,MEA,Reboiler steam,GJ/t captured CO2,4.050147575113793,4.106771526008904,1.398071300982663,3.5,-13.583395787703761,"Reaction, solvent sensible heat, water vaporisation and losses are explicit."
+Capture,MEA,MEA makeup,kg/t captured CO2,2.828712800504931,2.77,-2.07560132985048,,,O2- and SOx-sensitive degradation from Papa's method.
+Capture,MEA,CAPEX,MEUR,206.907221739841,207.74764451094384,0.40618339178106305,206.907221739841,0.0,"Same 250 MEUR/1 Mt/y, 0.65 scaling basis."
+Capture,MEA,Annualized capture cost,EUR/t captured CO2,73.7497477137853,74.27799210075693,0.716266025779091,80.45367231016301,9.090098345007112,Same finance and utility-price boundary.
+Purification,Train A,CO2 recovery,%,99.91894561446227,99.91894561446227,0.0,99.91894561446227,0.0,Identical mass-flow target.
+Purification,Train A,Product CO2,mol-%,99.88430727216809,99.89027939994605,0.00597904509833842,99.88430727216809,0.0,"Actual connected product, not a display-only target."
+Purification,Train A,Electricity,kWh/t feed CO2,105.94338553271727,106.4773792157152,0.5040368309100559,119.90273473735473,13.176234773360681,Multistage compression is included exactly once; Train B includes refrigeration.
+Purification,Train A,Thermal duty,kWhth/t feed CO2,42.84078999775586,40.603599040915995,-5.222104814026676,0.0,-100.0,Dehydration regeneration and deoxygenation preheat are explicit.
+Purification,Train A,Cooling duty,kWhth/t feed CO2,148.98429071751792,149.02108271388204,0.02469521866159382,0.0,-100.0,Compression/intercooling and feed cooling are explicit.
+Purification,Train A,CAPEX,MEUR,60.53669941401547,64.30387108827426,6.222955183755217,60.67861955891515,0.23443654225195726,Reference component totals and finance basis harmonized.
+Purification,Train A,Annualized purification cost,EUR/t product CO2,37.224360162462496,37.232777505883625,0.02261245964844705,34.660680220292925,-6.887102776194438,Utilities and project finance harmonized; consumable detail remains model-specific.
+Purification,Train B,CO2 recovery,%,99.68883422529505,99.68883422529505,0.0,99.68883422529505,0.0,Identical mass-flow target.
+Purification,Train B,Product CO2,mol-%,99.97562987640877,99.97562987640879,1.4214318762252017e-14,99.97562987640877,0.0,"Actual connected product, not a display-only target."
+Purification,Train B,Electricity,kWh/t feed CO2,145.6776887325495,148.00049184075536,1.5944810275445087,169.4710181830016,16.332857596426038,Multistage compression is included exactly once; Train B includes refrigeration.
+Purification,Train B,Thermal duty,kWhth/t feed CO2,2.4767967215493796,2.4440190957852472,-1.3233878048590135,0.0,-100.0,Dehydration regeneration and deoxygenation preheat are explicit.
+Purification,Train B,Cooling duty,kWhth/t feed CO2,106.08116510017831,106.72141990892446,0.6035518257567417,0.0,-100.0,Compression/intercooling and feed cooling are explicit.
+Purification,Train B,CAPEX,MEUR,111.68628689098911,121.25022026444576,8.563211867533463,112.16145598286518,0.42544980686828215,Reference component totals and finance basis harmonized.
+Purification,Train B,Annualized purification cost,EUR/t product CO2,49.06160160864789,50.833124326911616,3.6108130598644497,51.17177544704501,4.301070020561997,Utilities and project finance harmonized; consumable detail remains model-specific.

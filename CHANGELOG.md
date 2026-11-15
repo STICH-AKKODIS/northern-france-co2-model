@@ -1,3 +1,18 @@
+# Changelog
+
+## 0.8.0 — 15 November 2026
+
+- Added a selectable process-linked calculation path while preserving the exact v0.7.3 coefficient screen as a regression baseline.
+- Connected capture to purification with wet-product CO₂ flow, component composition, temperature and pressure; connected the achieved purification product to Peng–Robinson transport properties.
+- Added MEA cyclic-capacity, reboiler, blower, pump, O₂/SOₓ degradation, solvent makeup and wet-product calculations, restricted to MEA-family technologies.
+- Added separate Cryocap, oxyfuel, DMX, membrane, non-condensable-removal and cryogenic process-family responses.
+- Added component-resolved purification, bulk-water knockout, residual dehydration, deoxygenation, refrigeration and multistage compression to 110 bar, with explicit heat, cooling, consumables and mass-balance diagnostics.
+- Prevented physically inconsistent product targets from creating unaccounted inert gas; the achieved composition and a visible feasibility flag are now reported.
+- Added configurable source-feed compositions and Streamlit controls for CO₂, H₂O, O₂, SOₓ, NOₓ and CO.
+- Added process-consumable and annualized-equipment environmental burdens without changing the pipeline construction/material boundary.
+- Added local read-only Papa-model runner, matched-input comparison script, comparison CSV/JSON/figure/report, method documentation and a 20-item improvement register.
+- Added nine process-model tests; all 46 model, UI, EOS, trajectory and integration tests pass locally.
+
 ## 0.7.3 — 10 November 2026
 
 - Fixed a Streamlit dashboard smoke-test bug: `AppTest` information alerts use `.value`, not `.message`.
@@ -12,8 +27,6 @@
 - The source uses its CSV endpoint elevation; sink elevation comes from a route ending at the sink (otherwise 0 m). Conflicting shared-sink elevations cannot be applied.
 - Updated trajectory panel to report elevation availability and per-route Z range, display Z on route hover, and explain missing-elevation assumptions.
 - Added tests for 2D/3D, NULL Z, invalid elevations, multipart geometry and reversed routes.
-
-# Changelog
 
 ## 0.7.1 — 2026-11-10
 
