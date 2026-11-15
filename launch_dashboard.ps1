@@ -31,7 +31,7 @@ if (-not $componentsAvailable) {
     }
 }
 
-Write-Host "Opening the Northern France CO2 model with PR transport and Environmental Study..." -ForegroundColor Green
+Write-Host "Opening Northern France CO2 Model v0.8 with connected capture, purification and PR transport..." -ForegroundColor Green
 Write-Host "Close this window when the presentation is finished." -ForegroundColor DarkGray
 $env:STREAMLIT_BROWSER_GATHER_USAGE_STATS = "false"
 $dashboardUrl = "http://localhost:8501"

@@ -6,6 +6,13 @@ steam_price_eur_per_gj = 12.0
 electricity_emission_factor_tco2_per_mwh = 0.050
 steam_emission_factor_tco2_per_gj = 0.056
 currency_year = 2026
+cooling_price_eur_per_mwh = 5.0
+
+[process_model]
+calculation_mode = "process_linked"
+available_modes = ["process_linked", "screening"]
+stage_handoff = "capture_wet_product_to_purification_to_pipeline"
+reference_basis = "Papa capture and purification models, adapted to a fast configurable multi-source calculation"
 
 [transport]
 operating_hours_per_year = 8000.0

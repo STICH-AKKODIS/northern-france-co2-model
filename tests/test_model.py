@@ -264,10 +264,18 @@ class ModelRegressionTests(unittest.TestCase):
             low_row["purification_electricity_mwh_per_year"]
             / low_row["allocated_product_co2_tpy"],
         )
-        self.assertAlmostEqual(
+        # A 95 mol-% CO2 target combined with 20 ppmv H2O and very low trace
+        # limits cannot be formed from this capture product without adding an
+        # inert gas.  The process-linked model therefore reports the achievable
+        # purer product instead of inventing N2, and explicitly flags the target.
+        self.assertAlmostEqual(low_row["target_product_co2_mol_pct"], 95.0)
+        self.assertFalse(
+            low_row["purification_product_target_composition_feasible"]
+        )
+        self.assertGreater(low_row["product_co2_mol_pct"], 95.0)
+        self.assertGreater(
+            high_purity.summary["transport_eos_composition_mol_fraction"]["CO2"],
             low_purity.summary["transport_eos_composition_mol_fraction"]["CO2"],
-            0.95,
-            places=6,
         )
         self.assertGreater(
             high_purity.summary["transport_eos_density_min_kg_per_m3"],

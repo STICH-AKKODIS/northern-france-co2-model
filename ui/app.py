@@ -115,6 +115,7 @@ def calculate_case(
     steam_price: float,
     discount_rate: float,
     project_life: int,
+    calculation_mode: str,
     pipeline_material: str,
     source_overrides_json: str,
     trajectory_overrides_json: str,
@@ -131,6 +132,7 @@ def calculate_case(
             "discount_rate": discount_rate,
             "project_life_years": project_life,
         },
+        calculation_mode=calculation_mode,
         transport_overrides={"pipeline_material": pipeline_material},
         source_overrides=json.loads(source_overrides_json),
         trajectory_overrides=json.loads(trajectory_overrides_json),
@@ -254,6 +256,7 @@ def trajectory_payload_from_state(active_ids: tuple[str, ...]) -> dict[str, Any]
 def source_configuration_controls(
     inputs: ModelInputs,
     active_ids: tuple[str, ...],
+    calculation_mode: str,
 ) -> dict[str, dict[str, Any]]:
     """Render per-source technology and product-target controls."""
     st.markdown("#### Source technology & targets")
@@ -310,6 +313,80 @@ def source_configuration_controls(
                 f"TRL {int(capture['technology_readiness_level'])} · "
                 f"{capture['safety_category']}"
             )
+            if calculation_mode == "process_linked":
+                process_defaults = inputs.process_source_inputs[source.source_id]
+                adjust_feed = st.checkbox(
+                    "Adjust capture-feed composition",
+                    key=f"{source.source_id}_advanced_capture_feed",
+                    help=(
+                        "These source-side values drive gas volume, wet-product composition, "
+                        "capture energy and the purification feed. Defaults are documented "
+                        "screening proxies and remain editable."
+                    ),
+                )
+                if adjust_feed:
+                    st.caption(str(process_defaults.get("basis", "")))
+                    feed_left, feed_right = st.columns(2)
+                    with feed_left:
+                        flue_co2 = st.number_input(
+                            "Capture-feed CO₂ (mol-%)",
+                            min_value=0.1,
+                            max_value=95.0,
+                            value=float(process_defaults["flue_co2_mol_pct"]),
+                            step=0.1,
+                            key=f"{source.source_id}_flue_co2",
+                        )
+                        flue_h2o = st.number_input(
+                            "Capture-feed H₂O (mol-%)",
+                            min_value=0.0,
+                            max_value=40.0,
+                            value=float(process_defaults["flue_h2o_mol_pct"]),
+                            step=0.1,
+                            key=f"{source.source_id}_flue_h2o",
+                        )
+                        flue_o2 = st.number_input(
+                            "Capture-feed O₂ (mol-%)",
+                            min_value=0.0,
+                            max_value=25.0,
+                            value=float(process_defaults["flue_o2_mol_pct"]),
+                            step=0.1,
+                            key=f"{source.source_id}_flue_o2",
+                        )
+                    with feed_right:
+                        flue_sox = st.number_input(
+                            "Capture-feed SOₓ (ppmv)",
+                            min_value=0.0,
+                            max_value=10000.0,
+                            value=float(process_defaults["flue_sox_ppmv"]),
+                            step=1.0,
+                            key=f"{source.source_id}_flue_sox",
+                        )
+                        flue_nox = st.number_input(
+                            "Capture-feed NOₓ (ppmv)",
+                            min_value=0.0,
+                            max_value=10000.0,
+                            value=float(process_defaults["flue_nox_ppmv"]),
+                            step=1.0,
+                            key=f"{source.source_id}_flue_nox",
+                        )
+                        flue_co = st.number_input(
+                            "Capture-feed CO (ppmv)",
+                            min_value=0.0,
+                            max_value=500000.0,
+                            value=float(process_defaults["flue_co_ppmv"]),
+                            step=10.0,
+                            key=f"{source.source_id}_flue_co",
+                        )
+                    overrides.setdefault(source.source_id, {}).update(
+                        {
+                            "flue_co2_mol_pct": float(flue_co2),
+                            "flue_h2o_mol_pct": float(flue_h2o),
+                            "flue_o2_mol_pct": float(flue_o2),
+                            "flue_sox_ppmv": float(flue_sox),
+                            "flue_nox_ppmv": float(flue_nox),
+                            "flue_co_ppmv": float(flue_co),
+                        }
+                    )
 
             purification_labels = {
                 str(values["label"]): technology_id
@@ -412,7 +489,7 @@ def source_configuration_controls(
                 f"TRL {int(purification['technology_readiness_level'])} · "
                 f"{purification['safety_category']}"
             )
-            overrides[source.source_id] = {
+            overrides.setdefault(source.source_id, {}).update({
                 "capture_technology_id": capture_id,
                 "capture_rate": capture_rate_pct / 100.0,
                 "purification_technology_id": purification_id,
@@ -423,7 +500,7 @@ def source_configuration_controls(
                 "product_nox_ppmv": impurity_values["nox"],
                 "product_sox_ppmv": impurity_values["sox"],
                 "product_co_ppmv": impurity_values["co"],
-            }
+            })
     return overrides
 
 
@@ -624,6 +701,22 @@ with st.sidebar:
     )
     meta = SCENARIOS[selected_label]
     st.caption(meta["description"])
+    calculation_mode_labels = {
+        "Process-linked engineering model": "process_linked",
+        "Legacy screening coefficients": "screening",
+    }
+    selected_calculation_label = st.radio(
+        "Calculation fidelity",
+        list(calculation_mode_labels),
+        index=0,
+        help=(
+            "Process-linked mode transmits the wet capture product into purification, "
+            "uses explicit MEA or technology-specific energy models, and calculates "
+            "multistage compression once in purification. Legacy mode reproduces the "
+            "v0.7.3 coefficient screen."
+        ),
+    )
+    calculation_mode = calculation_mode_labels[selected_calculation_label]
 
     if meta["id"] == "custom_case":
         label_to_id = {source_display(source): source.source_id for source in inputs.sources}
@@ -656,7 +749,9 @@ with st.sidebar:
         trajectory_overrides, sort_keys=True, separators=(",", ":")
     )
 
-    source_overrides = source_configuration_controls(inputs, active_ids)
+    source_overrides = source_configuration_controls(
+        inputs, active_ids, calculation_mode
+    )
     source_overrides_json = json.dumps(
         source_overrides, sort_keys=True, separators=(",", ":")
     )
@@ -733,6 +828,7 @@ with st.sidebar:
         steam_price,
         discount_rate_pct,
         project_life,
+        calculation_mode,
         pipeline_material,
         carbon_value,
         source_overrides_json,
@@ -756,7 +852,7 @@ with st.sidebar:
         """,
         unsafe_allow_html=True,
     )
-    st.caption("Version 0.7.2 · QGIS CSV pipeline trajectory import with optional Z elevation")
+    st.caption("Version 0.8.0 · process-linked capture/purification with selectable v0.7.3 screening baseline")
 
 if run_clicked or "result" not in st.session_state:
     with st.spinner("Calculating the capture, purification and transport chain…"):
@@ -771,6 +867,7 @@ if run_clicked or "result" not in st.session_state:
                 steam_price,
                 discount_rate_pct / 100.0,
                 project_life,
+                calculation_mode,
                 pipeline_material,
                 source_overrides_json,
                 trajectory_overrides_json,
@@ -787,6 +884,7 @@ if run_clicked or "result" not in st.session_state:
                     steam_price,
                     discount_rate_pct / 100.0,
                     project_life,
+                    calculation_mode,
                     pipeline_material,
                     "{}",
                     trajectory_overrides_json,
@@ -1059,15 +1157,20 @@ with tabs[0]:
         [
             {
                 "ID": row["source_id"],
+                "Calculation": row["capture_calculation_method"].replace("_", " ").title(),
                 "Source": row["source_name"],
                 "Sector": SECTOR_LABELS[row["sector"]],
                 "Capture technology": row["capture_technology"],
+                "Method": row["capture_calculation_method"].replace("_", " ").title(),
                 "Emissions basis (kt/y)": row["emissions_basis_tpy"] / 1000.0,
                 "Captured (kt/y)": row["captured_before_purification_tpy"] / 1000.0,
                 "Capture rate": row["capture_rate"],
                 "Availability": row["availability"],
                 "Electricity (MWh/t captured)": row["capture_electricity_mwh_per_year"] / row["captured_before_purification_tpy"] if row["captured_before_purification_tpy"] else 0.0,
                 "Steam (GJ/t captured)": row["capture_steam_gj_per_year"] / row["captured_before_purification_tpy"] if row["captured_before_purification_tpy"] else 0.0,
+                "Cooling (GJ/t captured)": row.get("capture_specific_cooling_gj_per_t", 0.0),
+                "Solvent makeup (kg/t)": row.get("capture_specific_solvent_kg_per_t", 0.0),
+                "Wet product CO₂ (mol-%)": 100.0 * row.get("capture_raw_product_composition_mol_fraction", {}).get("CO2", 0.0),
                 "CAPEX (€m)": row["capture_capex_eur"] / 1e6,
                 "Cost (€/t product)": row["capture_cost_eur_per_t_product"],
                 "TRL": row["capture_technology_readiness_level"],
@@ -1107,14 +1210,24 @@ with tabs[0]:
             "Cost (€/t product)": st.column_config.NumberColumn(format="%.1f"),
             "Electricity (MWh/t captured)": st.column_config.NumberColumn(format="%.3f"),
             "Steam (GJ/t captured)": st.column_config.NumberColumn(format="%.2f"),
+            "Cooling (GJ/t captured)": st.column_config.NumberColumn(format="%.2f"),
+            "Solvent makeup (kg/t)": st.column_config.NumberColumn(format="%.2f"),
+            "Wet product CO₂ (mol-%)": st.column_config.NumberColumn(format="%.3f"),
         },
     )
     with st.expander("How the capture result is calculated"):
-        st.markdown(
-            "**Captured CO₂ = emissions basis × capturable fraction × capture rate × annual availability.**  "
-            "CAPEX is scaled from the reference train using a 0.67 exponent, then annualized over the selected project life. "
-            "Electricity, steam, consumables and fixed O&M are added separately."
-        )
+        if summary["calculation_mode"] == "process_linked":
+            st.markdown(
+                "**Captured CO₂ = emissions basis × capturable fraction × capture rate × annual availability.**  "
+                "For MEA, the reboiler duty is the sum of reaction heat, residual sensible heat after the rich/lean exchanger, water vaporisation and heat loss. "
+                "Blower and pump work are calculated from gas/solvent flow. Solvent degradation responds to O₂ and SOₓ. "
+                "Cryogenic, oxyfuel and DMX routes use their own configured process families; MEA equations are not applied to them."
+            )
+        else:
+            st.markdown(
+                "**Legacy v0.7.3 screen:** captured flow uses emissions × capturable fraction × capture rate × availability; "
+                "technology reference energy and CAPEX are adjusted by bounded interpolation factors."
+            )
     st.download_button(
         "Download capture results (CSV)",
         capture_df.to_csv(index=False).encode("utf-8-sig"),
@@ -1141,19 +1254,28 @@ with tabs[1]:
                 "ID": row["source_id"],
                 "Source": row["source_name"],
                 "Purification technology": row["purification_train"],
+                "Method": row["purification_calculation_method"].replace("_", " ").title(),
                 "Captured feed (kt/y)": row["captured_before_purification_tpy"] / 1000.0,
                 "Product (kt/y)": row["allocated_product_co2_tpy"] / 1000.0,
                 "Recovery": row["purification_recovery"],
-                "CO₂ (mol-%)": row["product_co2_mol_pct"],
-                "H₂O (ppmv)": row["product_h2o_ppmv"],
+                "Target CO₂ (mol-%)": row["target_product_co2_mol_pct"],
+                "Achieved CO₂ (mol-%)": row["product_co2_mol_pct"],
+                "Target H₂O (ppmv)": row["target_product_h2o_ppmv"],
+                "Achieved H₂O (ppmv)": row["product_h2o_ppmv"],
                 "O₂ (ppmv)": row["product_o2_ppmv"],
                 "NOₓ (ppmv)": row["product_nox_ppmv"],
                 "SOₓ (ppmv)": row["product_sox_ppmv"],
                 "CO (ppmv)": row["product_co_ppmv"],
-                "Quality benchmark": row["receiver_quality_status"],
+                "Selected-target benchmark": row["receiver_quality_status"],
+                "Achieved-product benchmark": (
+                    "Pass" if row["achieved_product_spec_pass"] else "Fail"
+                ),
                 "Safety screen": row["process_safety_screen_status"],
                 "Safety / quality flags": row["process_safety_screen_flags"] or "No flag in the configured screen",
                 "Electricity (MWh/t product)": row["purification_electricity_mwh_per_year"] / row["allocated_product_co2_tpy"] if row["allocated_product_co2_tpy"] else 0.0,
+                "Compression electricity (MWh/t)": row.get("purification_compression_electricity_mwh_per_t", 0.0),
+                "Thermal (MWh/t product)": row.get("purification_specific_thermal_mwh_per_t", 0.0),
+                "Cooling (MWh/t product)": row.get("purification_specific_cooling_mwh_per_t", 0.0),
                 "Cost (€/t product)": row["purification_cost_eur_per_t_product"],
                 "CAPEX (€m)": row["purification_capex_eur"] / 1e6,
             }
@@ -1170,9 +1292,48 @@ with tabs[1]:
             "Recovery": st.column_config.ProgressColumn(format="percent", min_value=0.90, max_value=1.0),
             "CAPEX (€m)": st.column_config.NumberColumn(format="%.1f"),
             "Electricity (MWh/t product)": st.column_config.NumberColumn(format="%.3f"),
+            "Compression electricity (MWh/t)": st.column_config.NumberColumn(format="%.3f"),
+            "Thermal (MWh/t product)": st.column_config.NumberColumn(format="%.3f"),
+            "Cooling (MWh/t product)": st.column_config.NumberColumn(format="%.3f"),
             "Cost (€/t product)": st.column_config.NumberColumn(format="%.1f"),
+            "Target CO₂ (mol-%)": st.column_config.NumberColumn(format="%.3f"),
+            "Achieved CO₂ (mol-%)": st.column_config.NumberColumn(format="%.3f"),
+            "Target H₂O (ppmv)": st.column_config.NumberColumn(format="%.1f"),
+            "Achieved H₂O (ppmv)": st.column_config.NumberColumn(format="%.1f"),
         },
     )
+
+    with st.expander("Connected stage handoff and balance checks", expanded=True):
+        handoff_rows = []
+        for row in active_rows:
+            feed_y = row.get("purification_feed_composition_mol_fraction", {})
+            product_y = row.get("purification_product_composition_mol_fraction", {})
+            handoff_rows.append(
+                {
+                    "ID": row["source_id"],
+                    "Capture wet-product CO₂ (kt/y)": row.get("capture_raw_product_co2_tpy", 0.0) / 1000.0,
+                    "Purification feed CO₂ (kt/y)": row.get("purification_feed_co2_tpy", 0.0) / 1000.0,
+                    "Feed CO₂ (mol-%)": 100.0 * feed_y.get("CO2", 0.0),
+                    "Feed H₂O (mol-%)": 100.0 * feed_y.get("H2O", 0.0),
+                    "Product CO₂ (kt/y)": row.get("purification_product_co2_tpy", 0.0) / 1000.0,
+                    "Product CO₂ (mol-%)": 100.0 * product_y.get("CO2", 0.0),
+                    "Purification loss (kt/y)": row.get("purification_side_stream_co2_tpy", 0.0) / 1000.0,
+                    "Balance error": abs(row.get("purification_mass_balance_error_fraction", 0.0)),
+                }
+            )
+        st.dataframe(
+            pd.DataFrame(handoff_rows),
+            hide_index=True,
+            width="stretch",
+            column_config={
+                "Balance error": st.column_config.NumberColumn(format="%.2e"),
+            },
+        )
+        st.caption(
+            "The capture wet-product flow and composition are the purification inlet. "
+            "The calculated purification product is the stream used for Peng–Robinson transport density and hydraulics. "
+            "Compression from the capture outlet to pipeline inlet pressure is counted in purification only."
+        )
 
     if summary["active_streams_failing_screened_product_spec"]:
         st.warning(
@@ -1832,7 +1993,7 @@ with tabs[3]:
 with tabs[4]:
     st.markdown(
         """
-        <div class="section-lead"><b>What happens here:</b> the model converts the engineering result into an environmental screening study. It combines capture and purification energy emissions, direct pipeline leakage, and tonne-kilometre lifecycle factors for pipeline operation and construction. It also benchmarks pipeline transport against alternative transport modes.</div>
+        <div class="section-lead"><b>What happens here:</b> the model converts the connected engineering result into an environmental study. It combines process utilities, solvent/water/hydrogen/sorbent and annualized-equipment burdens, direct pipeline leakage, and tonne-kilometre lifecycle factors for pipeline operation and construction. It also benchmarks pipeline transport against alternative transport modes.</div>
         """,
         unsafe_allow_html=True,
     )
@@ -1841,7 +2002,7 @@ with tabs[4]:
     env_kpis[0].metric(
         "Lifecycle net CO₂ avoided",
         fmt_mt(summary["environmental_lifecycle_net_avoided_co2_tpy"]),
-        help="Pipeline product minus direct leakage, capture/purification energy emissions and the screening transport lifecycle burden.",
+        help="Pipeline product minus process utility/non-energy burdens, direct leakage and the transport lifecycle burden.",
     )
     env_kpis[1].metric(
         "Climate burden",
@@ -1858,7 +2019,9 @@ with tabs[4]:
 
     burden_labels = [
         "Capture energy",
+        "Capture consumables/equipment",
         "Purification energy",
+        "Purification consumables/equipment",
         "Pipeline leakage",
         "Pipeline operation LCA",
         "Pipeline construction LCA",
@@ -1866,7 +2029,9 @@ with tabs[4]:
     ]
     burden_values = [
         summary["environmental_capture_energy_emissions_tco2e_per_year"],
+        summary["environmental_capture_nonenergy_emissions_tco2e_per_year"],
         summary["environmental_purification_energy_emissions_tco2e_per_year"],
+        summary["environmental_purification_nonenergy_emissions_tco2e_per_year"],
         summary["environmental_pipeline_leakage_tco2e_per_year"],
         summary["environmental_pipeline_use_emissions_tco2e_per_year"],
         summary["environmental_pipeline_construction_emissions_tco2e_per_year"],
@@ -1905,6 +2070,19 @@ with tabs[4]:
     energy_cols[2].metric(
         "Capture steam",
         f"{summary['environmental_capture_steam_gj_per_year'] / 1000:.1f} TJ/y",
+    )
+    energy_cols_2 = st.columns(3)
+    energy_cols_2[0].metric(
+        "Capture cooling",
+        f"{summary['environmental_capture_cooling_gj_per_year'] / 1000:.1f} TJ/y",
+    )
+    energy_cols_2[1].metric(
+        "Purification thermal",
+        f"{summary['environmental_purification_thermal_mwh_per_year'] / 1000:.1f} GWhth/y",
+    )
+    energy_cols_2[2].metric(
+        "Purification cooling",
+        f"{summary['environmental_purification_cooling_mwh_per_year'] / 1000:.1f} GWhth/y",
     )
 
     st.markdown("#### Transport lifecycle benchmark")
@@ -2023,15 +2201,17 @@ with tabs[5]:
                 "Capture": row["capture_rate"],
                 "Purification technology": row["purification_train"],
                 "Recovery": row["purification_recovery"],
-                "CO₂ purity (mol-%)": row["product_co2_mol_pct"],
-                "H₂O (ppmv)": row["product_h2o_ppmv"],
+                "Target CO₂ (mol-%)": row["target_product_co2_mol_pct"],
+                "Achieved CO₂ (mol-%)": row["product_co2_mol_pct"],
+                "Target H₂O (ppmv)": row["target_product_h2o_ppmv"],
+                "Achieved H₂O (ppmv)": row["product_h2o_ppmv"],
                 "Product (kt/y)": row["allocated_product_co2_tpy"] / 1000.0,
                 "Δ product vs default (kt/y)": (
                     row["allocated_product_co2_tpy"]
                     - baseline_source_lookup[row["source_id"]]["allocated_product_co2_tpy"]
                 )
                 / 1000.0,
-                "Source energy (kt CO₂-eq/y)": row["source_energy_emissions_tpy"] / 1000.0,
+                "Source process burden (kt CO₂-eq/y)": row["source_process_lifecycle_emissions_tpy"] / 1000.0,
                 "Capture + purification cost (€/t product)": (
                     row["capture_cost_eur_per_t_product"]
                     + row["purification_cost_eur_per_t_product"]
@@ -2059,11 +2239,13 @@ with tabs[5]:
             "Recovery": st.column_config.ProgressColumn(
                 format="percent", min_value=0.90, max_value=1.0
             ),
-            "CO₂ purity (mol-%)": st.column_config.NumberColumn(format="%.3f"),
-            "H₂O (ppmv)": st.column_config.NumberColumn(format="%.1f"),
+            "Target CO₂ (mol-%)": st.column_config.NumberColumn(format="%.3f"),
+            "Achieved CO₂ (mol-%)": st.column_config.NumberColumn(format="%.3f"),
+            "Target H₂O (ppmv)": st.column_config.NumberColumn(format="%.1f"),
+            "Achieved H₂O (ppmv)": st.column_config.NumberColumn(format="%.1f"),
             "Product (kt/y)": st.column_config.NumberColumn(format="%.1f"),
             "Δ product vs default (kt/y)": st.column_config.NumberColumn(format="%+.1f"),
-            "Source energy (kt CO₂-eq/y)": st.column_config.NumberColumn(
+            "Source process burden (kt CO₂-eq/y)": st.column_config.NumberColumn(
                 format="%.1f"
             ),
             "Capture + purification cost (€/t product)": st.column_config.NumberColumn(
@@ -2076,7 +2258,7 @@ with tabs[5]:
     )
     st.caption(
         "Change any source technology or target in the sidebar, then run the scenario. "
-        "Mass balance, source CAPEX/OPEX, energy emissions, product quality, PR composition, hydraulics and management indicators are recalculated together."
+        "Mass/component balance, source CAPEX/OPEX, utilities and consumables, achieved product quality, PR composition, hydraulics and management indicators are recalculated together."
     )
 
     selected_material_row = selected_material_decision

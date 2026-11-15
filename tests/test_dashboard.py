@@ -103,12 +103,16 @@ class DashboardSmokeTests(unittest.TestCase):
         selectbox_labels = [element.label for element in self.dashboard.selectbox]
         slider_labels = [element.label for element in self.dashboard.slider]
         number_input_labels = [element.label for element in self.dashboard.number_input]
+        radio_labels = [element.label for element in self.dashboard.radio]
+        checkbox_labels = [element.label for element in self.dashboard.checkbox]
+        self.assertIn("Calculation fidelity", radio_labels)
         self.assertIn("Capture technology", selectbox_labels)
         self.assertIn("Purification technology", selectbox_labels)
         self.assertIn("CO₂ capture efficiency", slider_labels)
         self.assertIn("CO₂ recovery through purification", slider_labels)
         self.assertIn("Product CO₂ purity (mol-%)", number_input_labels)
         self.assertIn("Product H₂O (ppmv)", number_input_labels)
+        self.assertIn("Adjust capture-feed composition", checkbox_labels)
 
 
 if __name__ == "__main__":

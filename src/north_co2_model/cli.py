@@ -24,7 +24,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--trajectory-json",
         type=Path,
         default=None,
-        help="Optional v0.7 trajectory JSON exported by the dashboard.",
+        help="Optional pipeline-trajectory JSON exported by the dashboard.",
     )
     return parser
 

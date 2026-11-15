@@ -98,11 +98,31 @@ def calculate_environmental_study(
 
     capture_energy_emissions = sum(float(row["capture_energy_emissions_tpy"]) for row in source_results)
     purification_energy_emissions = sum(float(row["purification_energy_emissions_tpy"]) for row in source_results)
+    capture_nonenergy_emissions = sum(
+        float(row.get("capture_nonenergy_emissions_tpy", 0.0))
+        for row in source_results
+    )
+    purification_nonenergy_emissions = sum(
+        float(row.get("purification_nonenergy_emissions_tpy", 0.0))
+        for row in source_results
+    )
     pipeline_leakage = float(pipeline.get("pipeline_leakage_tpy", 0.0))
 
     capture_electricity = sum(float(row["capture_electricity_mwh_per_year"]) for row in source_results)
     purification_electricity = sum(float(row["purification_electricity_mwh_per_year"]) for row in source_results)
     capture_steam = sum(float(row["capture_steam_gj_per_year"]) for row in source_results)
+    capture_cooling = sum(
+        float(row.get("capture_cooling_gj_per_year", 0.0))
+        for row in source_results
+    )
+    purification_thermal = sum(
+        float(row.get("purification_thermal_mwh_per_year", 0.0))
+        for row in source_results
+    )
+    purification_cooling = sum(
+        float(row.get("purification_cooling_mwh_per_year", 0.0))
+        for row in source_results
+    )
 
     allocated_product = sum(float(row["allocated_product_co2_tpy"]) for row in source_results)
     sink_received = max(allocated_product - pipeline_leakage, 0.0)
@@ -110,6 +130,8 @@ def calculate_environmental_study(
     total_burden = (
         capture_energy_emissions
         + purification_energy_emissions
+        + capture_nonenergy_emissions
+        + purification_nonenergy_emissions
         + pipeline_leakage
         + pipeline_use_emissions
         + pipeline_construction_emissions
@@ -156,8 +178,16 @@ def calculate_environmental_study(
         "environmental_purification_electricity_mwh_per_year": purification_electricity,
         "environmental_total_electricity_mwh_per_year": capture_electricity + purification_electricity,
         "environmental_capture_steam_gj_per_year": capture_steam,
+        "environmental_capture_cooling_gj_per_year": capture_cooling,
+        "environmental_purification_thermal_mwh_per_year": purification_thermal,
+        "environmental_purification_cooling_mwh_per_year": purification_cooling,
         "environmental_capture_energy_emissions_tco2e_per_year": capture_energy_emissions,
         "environmental_purification_energy_emissions_tco2e_per_year": purification_energy_emissions,
+        "environmental_capture_nonenergy_emissions_tco2e_per_year": capture_nonenergy_emissions,
+        "environmental_purification_nonenergy_emissions_tco2e_per_year": purification_nonenergy_emissions,
+        "environmental_process_nonenergy_emissions_tco2e_per_year": (
+            capture_nonenergy_emissions + purification_nonenergy_emissions
+        ),
         "environmental_pipeline_leakage_tco2e_per_year": pipeline_leakage,
         "environmental_pipeline_use_factor_gco2e_per_tkm": pipeline_use_factor,
         "environmental_pipeline_construction_factor_gco2e_per_tkm": construction_factor,
@@ -174,6 +204,7 @@ def calculate_environmental_study(
         "environmental_transport_benchmarks": benchmark_rows,
         "environmental_limitations": [
             "The transport lifecycle factors are screening values, not a project-specific EPD or ISO-compliant LCA.",
+            "Process-linked cases include screening solvent, sorbent, hydrogen, water and annualized equipment burdens; supplier-specific life-cycle data remain configurable future inputs.",
             "Only the selected material's embodied-carbon difference versus the X65 reference is added to the annual burden; the generic construction factor already represents the baseline pipeline construction burden.",
             "Segments marked as existing retain use-phase emissions and leakage, but receive no new-construction or new-material burden in this project screen.",
             "Biodiversity, land occupation, water impacts, construction crossings, noise and local air-quality impacts require a routed corridor and site-specific inventory.",

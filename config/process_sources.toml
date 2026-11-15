@@ -1,0 +1,74 @@
+# Source-side process inputs used by the process-linked calculation path.
+# These values are transparent engineering screening proxies, not plant assays.
+# Every field is exposed in the dashboard and should be replaced by measured,
+# time-resolved gas data before FEED decisions.
+
+[source.S1]
+flue_co2_mol_pct = 25.0
+flue_h2o_mol_pct = 15.0
+flue_o2_mol_pct = 3.0
+flue_ar_mol_pct = 0.9
+flue_sox_ppmv = 35.0
+flue_nox_ppmv = 200.0
+flue_co_ppmv = 50.0
+flue_temperature_c = 120.0
+capture_product_temperature_c = 40.0
+capture_product_pressure_bar = 1.5
+basis = "Lime-kiln engineering screening proxy; replace with source assay."
+quality = "screening-proxy"
+
+[source.S2]
+flue_co2_mol_pct = 14.0
+flue_h2o_mol_pct = 11.0
+flue_o2_mol_pct = 4.0
+flue_ar_mol_pct = 0.93
+flue_sox_ppmv = 35.0
+flue_nox_ppmv = 146.0
+flue_co_ppmv = 2500.0
+flue_temperature_c = 120.0
+capture_product_temperature_c = 40.0
+capture_product_pressure_bar = 1.5
+basis = "Papa NB01 reference flue composition, retained as an explicit MEA benchmark proxy; replace with ETEX assay."
+quality = "reference-model-proxy"
+
+[source.S3]
+flue_co2_mol_pct = 70.0
+flue_h2o_mol_pct = 20.0
+flue_o2_mol_pct = 2.0
+flue_ar_mol_pct = 0.5
+flue_sox_ppmv = 50.0
+flue_nox_ppmv = 150.0
+flue_co_ppmv = 100.0
+flue_temperature_c = 80.0
+capture_product_temperature_c = 35.0
+capture_product_pressure_bar = 2.0
+basis = "Oxyfuel recycle-gas engineering screening proxy; replace with K6 design composition."
+quality = "project-screening-proxy"
+
+[source.S4]
+flue_co2_mol_pct = 1.5
+flue_h2o_mol_pct = 2.0
+flue_o2_mol_pct = 19.0
+flue_ar_mol_pct = 0.9
+flue_sox_ppmv = 200.0
+flue_nox_ppmv = 50.0
+flue_co_ppmv = 200.0
+flue_temperature_c = 80.0
+capture_product_temperature_c = 40.0
+capture_product_pressure_bar = 1.5
+basis = "Dilute aluminium pot-gas engineering screening proxy; replace with duct survey and assay."
+quality = "low-maturity-screening-proxy"
+
+[source.S5]
+flue_co2_mol_pct = 22.0
+flue_h2o_mol_pct = 5.0
+flue_o2_mol_pct = 0.5
+flue_ar_mol_pct = 0.5
+flue_sox_ppmv = 20.0
+flue_nox_ppmv = 50.0
+flue_co_ppmv = 200000.0
+flue_temperature_c = 45.0
+capture_product_temperature_c = 40.0
+capture_product_pressure_bar = 1.5
+basis = "Selected blast-furnace-gas engineering screening proxy; replace with DMX feed definition."
+quality = "pilot-screening-proxy"

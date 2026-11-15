@@ -3,5 +3,5 @@
 from .model import load_model_inputs, run_scenario
 
 __all__ = ["load_model_inputs", "run_scenario"]
-__version__ = "0.7.3"
+__version__ = "0.8.0"
 

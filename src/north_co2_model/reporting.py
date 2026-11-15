@@ -167,6 +167,7 @@ def plot_network(inputs: ModelInputs, result: ScenarioResult, path: Path) -> Non
     diameter_range = f"DN {min(diameters):.0f}–{max(diameters):.0f}" if diameters else "—"
     panel.text(0.0, 0.97, "Scenario summary", fontsize=15, fontweight="bold", color="#0F172A", transform=panel.transAxes)
     metrics = [
+        ("Calculation", summary.get("calculation_mode", "screening").replace("_", " ").title()),
         ("Active sources", f"{summary['active_sources']} / {len(inputs.sources)}"),
         ("Captured", f"{summary['total_captured_before_purification_tpy'] / 1e6:.2f} Mt/y"),
         ("Purified", f"{summary['total_purified_co2_tpy'] / 1e6:.2f} Mt/y"),
@@ -204,7 +205,7 @@ def plot_network(inputs: ModelInputs, result: ScenarioResult, path: Path) -> Non
     panel.text(
         0.0,
         -0.005,
-        "Screening / pre-FEED result. Route uplifts are\nproxies; surveyed corridors, crossings, elevation\nand transient operation require FEED data.",
+        "Engineering / pre-FEED result. Source assays,\nsurveyed corridors, phase envelopes and transient\noperation remain project inputs.",
         fontsize=7.8,
         color="#64748B",
         transform=panel.transAxes,
@@ -224,6 +225,8 @@ def write_markdown_report(inputs: ModelInputs, result: ScenarioResult, path: Pat
         "",
         s["description"],
         "",
+        f"Calculation mode: **{s.get('calculation_mode', 'screening').replace('_', ' ')}**. Capture → purification connected: **{s.get('capture_to_purification_connected', False)}**. Purification → transport connected: **{s.get('purification_to_transport_connected', False)}**.",
+        "",
         "| Headline metric | Result |",
         "|---|---:|",
         f"| CO₂ captured | {s['total_captured_before_purification_tpy'] / 1e6:.3f} Mt/y |",
@@ -238,13 +241,13 @@ def write_markdown_report(inputs: ModelInputs, result: ScenarioResult, path: Pat
         "",
         f"Capture CAPEX: **{_money(s['capture_capex_eur'])}**. Annualized capture cost: **€{s['capture_cost_eur_per_t_received']:.1f}/t received**.",
         "",
-        "| ID | Source | Emissions basis (kt/y) | Captured (kt/y) | Technology | Capture rate | Availability |",
-        "|---|---|---:|---:|---|---:|---:|",
+        "| ID | Source | Emissions basis (kt/y) | Captured (kt/y) | Technology | Method | Capture rate | Availability |",
+        "|---|---|---:|---:|---|---|---:|---:|",
     ]
     for row in result.source_results:
         lines.append(
             f"| {row['source_id']} | {row['source_name']} | {row['emissions_basis_tpy'] / 1000:,.1f} | "
-            f"{row['captured_before_purification_tpy'] / 1000:,.1f} | {row['capture_technology']} | "
+            f"{row['captured_before_purification_tpy'] / 1000:,.1f} | {row['capture_technology']} | {row.get('capture_calculation_method', 'screening')} | "
             f"{row['capture_rate']:.1%} | {row['availability']:.1%} |"
         )
 
@@ -255,16 +258,19 @@ def write_markdown_report(inputs: ModelInputs, result: ScenarioResult, path: Pat
             "",
             f"Purification CAPEX: **{_money(s['purification_capex_eur'])}**. Annualized purification cost: **€{s['purification_cost_eur_per_t_received']:.1f}/t received**.",
             "",
-            "| ID | Captured feed (kt/y) | Product (kt/y) | Recovery | CO₂ purity | H₂O | Screened specification |",
-            "|---|---:|---:|---:|---:|---:|---|",
+            "| ID | Captured feed (kt/y) | Product (kt/y) | Recovery | Target / achieved CO₂ | Target / achieved H₂O | Method | Target benchmark | Achieved benchmark |",
+            "|---|---:|---:|---:|---:|---:|---|---|---|",
         ]
     )
     for row in result.source_results:
-        status = "Pass" if row["product_spec_screening_pass"] else "Fail"
+        target_status = "Pass" if row["product_spec_screening_pass"] else "Fail"
+        achieved_status = "Pass" if row["achieved_product_spec_pass"] else "Fail"
         lines.append(
             f"| {row['source_id']} | {row['captured_before_purification_tpy'] / 1000:,.1f} | "
             f"{row['allocated_product_co2_tpy'] / 1000:,.1f} | {row['purification_recovery']:.1%} | "
-            f"{row['product_co2_mol_pct']:.2f} mol-% | {row['product_h2o_ppmv']:.0f} ppmv | {status} |"
+            f"{row['target_product_co2_mol_pct']:.2f} / {row['product_co2_mol_pct']:.2f} mol-% | "
+            f"{row['target_product_h2o_ppmv']:.0f} / {row['product_h2o_ppmv']:.0f} ppmv | "
+            f"{row.get('purification_calculation_method', 'screening')} | {target_status} | {achieved_status} |"
         )
 
     lines.extend(
@@ -299,12 +305,16 @@ def write_markdown_report(inputs: ModelInputs, result: ScenarioResult, path: Pat
             "",
             "## 4. Environmental study",
             "",
-            f"Assessment year: **{s['environmental_assessment_year']}**. The screening layer combines capture/purification energy emissions, direct pipeline leakage, and lifecycle transport factors based on annual tonne-kilometres.",
+            f"Assessment year: **{s['environmental_assessment_year']}**. The layer combines process utility/consumable/equipment emissions, direct pipeline leakage, and lifecycle transport factors based on annual tonne-kilometres.",
             "",
             "| Environmental metric | Result |",
             "|---|---:|",
             f"| Total electricity demand | {s['environmental_total_electricity_mwh_per_year'] / 1000:,.1f} GWh/y |",
             f"| Capture steam demand | {s['environmental_capture_steam_gj_per_year'] / 1000:,.1f} TJ/y |",
+            f"| Capture cooling demand | {s['environmental_capture_cooling_gj_per_year'] / 1000:,.1f} TJ/y |",
+            f"| Purification thermal demand | {s['environmental_purification_thermal_mwh_per_year'] / 1000:,.1f} GWhth/y |",
+            f"| Purification cooling demand | {s['environmental_purification_cooling_mwh_per_year'] / 1000:,.1f} GWhth/y |",
+            f"| Process consumable/equipment climate burden | {s['environmental_process_nonenergy_emissions_tco2e_per_year']:,.1f} t CO₂-eq/y |",
             f"| Direct pipeline leakage | {s['environmental_pipeline_leakage_tco2e_per_year']:,.1f} t CO₂/y |",
             f"| Pipeline use-phase climate burden | {s['environmental_pipeline_use_emissions_tco2e_per_year']:,.1f} t CO₂-eq/y |",
             f"| Pipeline construction climate burden | {s['environmental_pipeline_construction_emissions_tco2e_per_year']:,.1f} t CO₂-eq/y |",
@@ -354,8 +364,14 @@ def write_environmental_outputs(result: ScenarioResult, output_dir: Path) -> Non
         "environmental_purification_electricity_mwh_per_year",
         "environmental_total_electricity_mwh_per_year",
         "environmental_capture_steam_gj_per_year",
+        "environmental_capture_cooling_gj_per_year",
+        "environmental_purification_thermal_mwh_per_year",
+        "environmental_purification_cooling_mwh_per_year",
         "environmental_capture_energy_emissions_tco2e_per_year",
         "environmental_purification_energy_emissions_tco2e_per_year",
+        "environmental_capture_nonenergy_emissions_tco2e_per_year",
+        "environmental_purification_nonenergy_emissions_tco2e_per_year",
+        "environmental_process_nonenergy_emissions_tco2e_per_year",
         "environmental_pipeline_leakage_tco2e_per_year",
         "environmental_pipeline_use_factor_gco2e_per_tkm",
         "environmental_pipeline_construction_factor_gco2e_per_tkm",
@@ -403,6 +419,7 @@ def write_scenario_outputs(inputs: ModelInputs, result: ScenarioResult, output_d
 def write_scenario_comparison(results: list[ScenarioResult], output_dir: Path) -> None:
     fields = [
         "scenario",
+        "calculation_mode",
         "flow_basis",
         "active_sources",
         "sink_capacity_tpy",
