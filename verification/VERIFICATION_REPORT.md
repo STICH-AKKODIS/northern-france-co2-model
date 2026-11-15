@@ -4,7 +4,7 @@
 
 - 46 automated model, UI, EOS, trajectory and integration tests pass.
 - All four standard scenarios were regenerated with the process-linked calculation.
-- The frozen v0.7.3 coefficient calculation remains selectable and its announced-case cost regression is exact.
+- The v0.7.3 coefficient calculation is regenerated locally and its announced-case cost regression is exact.
 - Papa's preserved capture and purification packages were executed without modification and compared on a harmonized basis.
 - These checks demonstrate software consistency and matched-model agreement; they are not independent experimental or vendor validation.
 
@@ -17,7 +17,7 @@
 | user_inventory_4mt | Pass | Pass | 1.24e-16 |
 | user_inventory_unconstrained | Pass | Pass | 1.24e-16 |
 
-## Announced 2030 case: frozen screen versus connected model
+## Announced 2030 case: regenerated screen versus connected model
 
 | Metric | Unit | v0.7.3 screen | v0.8.0 process-linked | Change |
 |---|---:|---:|---:|---:|

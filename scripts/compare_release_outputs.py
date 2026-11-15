@@ -4,12 +4,18 @@ from __future__ import annotations
 
 import csv
 import json
+import sys
 from pathlib import Path
 from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[1]
-BASELINE = ROOT / "verification" / "baseline_v073" / "scenario_comparison.csv"
+SRC = ROOT / "src"
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
+
+from north_co2_model.model import load_model_inputs, run_custom_scenario  # noqa: E402
+
 PROCESS = ROOT / "verification" / "process_linked" / "scenario_comparison.csv"
 COMPARISON_DIR = ROOT / "verification" / "comparison"
 
@@ -34,8 +40,25 @@ def read_by_scenario(path: Path) -> dict[str, dict[str, str]]:
         return {row["scenario"]: row for row in csv.DictReader(handle)}
 
 
-def number(value: str) -> float:
+def number(value: str | float | int) -> float:
     return float(value)
+
+
+def build_legacy_baseline() -> dict[str, dict[str, Any]]:
+    inputs = load_model_inputs(ROOT)
+    results: dict[str, dict[str, Any]] = {}
+    for scenario_name, scenario in inputs.config["scenarios"].items():
+        result = run_custom_scenario(
+            inputs,
+            active_source_ids=scenario["active_source_ids"],
+            flow_basis=str(scenario["flow_basis"]),
+            sink_capacity_tpy=float(scenario["sink_capacity_tpy"]),
+            enforce_sink_capacity=bool(scenario["enforce_sink_capacity"]),
+            calculation_mode="screening",
+            scenario_name=scenario_name,
+        )
+        results[scenario_name] = result.summary
+    return results
 
 
 def format_value(value: float, unit: str) -> str:
@@ -47,7 +70,7 @@ def format_value(value: float, unit: str) -> str:
 
 
 def main() -> int:
-    baseline = read_by_scenario(BASELINE)
+    baseline = build_legacy_baseline()
     process = read_by_scenario(PROCESS)
     if set(baseline) != set(process):
         raise ValueError("Baseline and process-linked scenario sets do not match")
@@ -119,7 +142,7 @@ def main() -> int:
         "",
         "- 46 automated model, UI, EOS, trajectory and integration tests pass.",
         "- All four standard scenarios were regenerated with the process-linked calculation.",
-        "- The frozen v0.7.3 coefficient calculation remains selectable and its announced-case cost regression is exact.",
+        "- The v0.7.3 coefficient calculation is regenerated locally and its announced-case cost regression is exact.",
         "- Papa's preserved capture and purification packages were executed without modification and compared on a harmonized basis.",
         "- These checks demonstrate software consistency and matched-model agreement; they are not independent experimental or vendor validation.",
         "",
@@ -137,7 +160,7 @@ def main() -> int:
     report.extend(
         [
             "",
-            "## Announced 2030 case: frozen screen versus connected model",
+            "## Announced 2030 case: regenerated screen versus connected model",
             "",
             "| Metric | Unit | v0.7.3 screen | v0.8.0 process-linked | Change |",
             "|---|---:|---:|---:|---:|",

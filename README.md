@@ -156,7 +156,7 @@ The model also corrects the legacy endpoint coordinate and uses Lambert-93 consi
 | `docs/` | Process equations, comparison report, assumptions, data quality and user guide |
 | `tests/` | Regression checks |
 | `scripts/` | Local Papa execution, matched-input comparison and full verification runner |
-| `verification/` | Baseline, reference, comparison and process-linked numerical evidence |
+| `verification/` | Regenerated reference, comparison and process-linked numerical evidence |
 | `outputs/` | Reproducible scenario reports and maps |
 
 Superseded legacy prototypes, duplicate workbooks and stale output folders have been removed from the active project.
