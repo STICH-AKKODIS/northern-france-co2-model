@@ -4,3 +4,5 @@ networkx>=3.2,<4
 pandas>=2.2,<4
 plotly>=5.24,<7
 streamlit>=1.40,<2
+fpdf2>=2.9.0,<3
+kaleido>=1.5.1,<2

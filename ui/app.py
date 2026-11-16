@@ -34,6 +34,11 @@ from north_co2_model.model import (
     run_custom_scenario,
 )
 
+from north_co2_model.pdf_reporting import (
+    PDF_REPORT_INPUT,
+    generate_pdf_report
+)
+
 
 st.set_page_config(
     page_title="Northern France CO₂ Model",
@@ -684,6 +689,7 @@ _load_css()
 inputs = get_inputs()
 finance_defaults = inputs.config["finance"]
 
+
 with st.sidebar:
     st.markdown(
         """
@@ -1133,6 +1139,7 @@ with st.expander("Executive decision gates", expanded=True):
         "Independent gates are shown instead of a single composite score so that a strong result cannot hide a critical weakness."
     )
     st.dataframe(pd.DataFrame(decision_rows), hide_index=True, width="stretch")
+
 
 tabs = st.tabs(
     [
@@ -2413,3 +2420,25 @@ with tabs[5]:
         file_name=f"{result.scenario}_material_decision_table.csv",
         mime="text/csv",
     )
+
+
+
+# TODO Add check for generate PDF
+generate_report_pdf_check = bool(True)
+pdf_data = PDF_REPORT_INPUT()
+
+pdf_data.scenarioLabel = selected_label
+pdf_data.scenario = SCENARIOS[selected_label]
+
+pdf_data.result = result
+pdf_data.session_state = st.session_state
+
+pdf_data.decision_rows = decision_rows
+
+pdf_data.capture_df = capture_df
+pdf_data.cost_figure = cost_figure(summary)
+
+# TODO PDF Generation management
+if generate_report_pdf_check:
+    generate_pdf_report(pdf_data)
+
