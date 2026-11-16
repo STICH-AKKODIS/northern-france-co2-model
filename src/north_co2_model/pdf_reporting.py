@@ -26,10 +26,7 @@ PDF_COLORS = {
 
 @dataclass
 class PDF_REPORT_INPUT:
-    # decision_rows: list[dict[str, str]]
-    # """Executive decision gates"""
-    truc = True
-    # result: ScenarioResult
+    truc = True # TODO Rework class definition
 
 
 
@@ -80,10 +77,17 @@ def generate_pdf_section_capture(pdf : PDF, pdf_data : PDF_REPORT_INPUT) -> None
     pdf.ln(8)
 
     # Section description
-    pdf.set_font("NotoSerif", "B", size=12)
-    pdf.write(5, f"What happens here:")
     pdf.set_font("NotoSerif", "", size=12)
-    pdf.write(5, f"eligible flue-gas streams are selected, CO₂ is separated using a source-specific technology, and annual plant availability is applied. Capture excludes later dehydration, polishing and compression.")
+    pdf.write_html(
+        """
+        <p align="justify">
+        <b>How the capture result is calculated:</b>
+        eligible flue-gas streams are selected, CO₂ is separated using a
+        source-specific technology, and annual plant availability is applied.
+        Capture excludes later dehydration, polishing and compression.
+        </p>
+        """
+    )    
     pdf.ln(8)
 
     # Note : possible refactoring with app.py with have the same graph
@@ -94,7 +98,7 @@ def generate_pdf_section_capture(pdf : PDF, pdf_data : PDF_REPORT_INPUT) -> None
     fig_capture.add_trace(go.Bar(name="Captured", x=pdf_data.capture_df["ID"], y=pdf_data.capture_df["Captured (kt/y)"], marker_color=PDF_COLORS["capture"]))
     fig_capture.update_layout(
         barmode="group",
-        height=390,
+        height=335,
         margin={"l": 50, "r": 20, "t": 35, "b": 40},
         paper_bgcolor="white",
         plot_bgcolor="white",
@@ -130,39 +134,33 @@ def generate_pdf_section_capture(pdf : PDF, pdf_data : PDF_REPORT_INPUT) -> None
 
     # Detailed datas
     pdf.add_page()
-    pdf.set_font("NotoSerif", size=12)
     pdf.set_draw_color(0, 0, 0)
     pdf.set_line_width(0.3)
     headings_style = FontFace(emphasis="BOLD", color=255, fill_color=(180, 180, 180))
+    # TODO : PDF Split the table in at least two table for lisibility
+    
     with pdf.table(
         # borders_layout="NO_HORIZONTAL_LINES",
         # cell_fill_color=(224, 235, 255),
         # cell_fill_mode=TableCellFillMode.ROWS,
-        col_widths=(15, 30, 30, 50, 25, 25, 20, 20, 30, 30, 25, 25, 15, 20),
+        col_widths=(8, 40, 15, 30, 20),
         headings_style=headings_style,
         line_height=6,
         # text_align=("LEFT"),
         width=190,
     ) as table:
-        # Add decision table header
+        # Add table header
+        pdf.set_font("NotoSerif", size=12)
         headerRow = table.row()
         headerRow.min_height = 8
         headerRow.cell("ID")
         headerRow.cell("Source")
         headerRow.cell("Sector")
         headerRow.cell("Capture technology")
-        headerRow.cell("Emissions basis (kt/y)")
-        headerRow.cell("Captured (kt/y)")
-        headerRow.cell("Capture rate")
-        headerRow.cell("Availability")
-        headerRow.cell("Electricity (MWh/t captured)")
-        headerRow.cell("Steam (GJ/t captured)")
-        headerRow.cell("CAPEX (€m)")
-        headerRow.cell("Cost (€/t product)")
-        headerRow.cell("TRL")
         headerRow.cell("Maturity")
 
-        #Add decision table content
+        
+        #Add table content
         pdf.set_font("NotoSerif", size=10)
         for data_row in pdf_data.capture_df.to_dict(orient="records"):
             row = table.row()
@@ -170,37 +168,82 @@ def generate_pdf_section_capture(pdf : PDF, pdf_data : PDF_REPORT_INPUT) -> None
             row.cell(str(data_row["Source"]))
             row.cell(str(data_row["Sector"]))
             row.cell(str(data_row["Capture technology"]))
+            row.cell(str(data_row["Maturity"]))
+
+    pdf.ln(8)   # vertical space between tables
+
+    with pdf.table(
+        # borders_layout="NO_HORIZONTAL_LINES",
+        # cell_fill_color=(224, 235, 255),
+        # cell_fill_mode=TableCellFillMode.ROWS,
+        col_widths=(9, 26, 22, 20, 26, 24, 22, 22, 20, 20, 16, 20, 6),
+        headings_style=headings_style,
+        line_height=6,
+        # text_align=("LEFT"),
+        width=190,
+    ) as table:
+        # Add table header
+        pdf.set_font("NotoSerif", size=8)
+        headerRow = table.row()
+        headerRow.min_height = 8
+        headerRow.cell("ID")
+        headerRow.cell("Emissions basis (kt/y)")
+        headerRow.cell("Captured (kt/y)")
+        headerRow.cell("Capture rate")
+        headerRow.cell("Availability")
+        headerRow.cell("Electricity (MWh/t captured)")
+        headerRow.cell("Steam (GJ/t captured)")
+        headerRow.cell("Cooling (GJ/t captured)")
+        headerRow.cell("Solvent makeup (kg/t)")
+        headerRow.cell("Wet product CO₂ (mol-%)")
+        headerRow.cell("CAPEX (€m)")
+        headerRow.cell("Cost (€/t product)")
+        headerRow.cell("TRL")
+
+        #Add table content
+        pdf.set_font("NotoSerif", size=10)
+        for data_row in pdf_data.capture_df.to_dict(orient="records"):
+            row = table.row()
+            row.cell(str(data_row["ID"]))
             row.cell(f"{data_row['Emissions basis (kt/y)']:.1f}")
             row.cell(f"{data_row['Captured (kt/y)']:.1f}")
             row.cell(f"{(data_row['Capture rate']*100):.0f}%")
             row.cell(f"{(data_row['Availability']*100):.0f}%")
             row.cell(f"{data_row['Electricity (MWh/t captured)']:.3f}")
             row.cell(f"{data_row['Steam (GJ/t captured)']:.2f}")
+            row.cell(f"{data_row['Cooling (GJ/t captured)']:.2f}")
+            row.cell(f"{data_row['Solvent makeup (kg/t)']:.2f}")
+            row.cell(f"{data_row['Wet product CO₂ (mol-%)']:.3f}")
             row.cell(f"{data_row['CAPEX (€m)']:.1f}")
             row.cell(f"{data_row['Cost (€/t product)']:.1f}")
             row.cell(str(data_row["TRL"]))
-            row.cell(str(data_row["Maturity"]))
-    # st.dataframe(
-    #     pdf_data.capture_df,
-    #     hide_index=True,
-    #     width="stretch",
-    #     column_config={
-    #         "Capture rate": st.column_config.ProgressColumn(format="percent", min_value=0, max_value=1),
-    #         "Availability": st&.column_config.ProgressColumn(format="percent", min_value=0, max_value=1),
-    #         "Emissions basis (kt/y)": st.column_config.NumberColumn(format="%.1f"),
-    #         "Captured (kt/y)": st.column_config.NumberColumn(format="%.1f"),
-    #         "CAPEX (€m)": st.column_config.NumberColumn(format="%.1f"),
-    #         "Cost (€/t product)": st.column_config.NumberColumn(format="%.1f"),
-    #         "Electricity (MWh/t captured)": st.column_config.NumberColumn(format="%.3f"),
-    #         "Steam (GJ/t captured)": st.column_config.NumberColumn(format="%.2f"),
-    #     },
-    # )
-    # with st.expander("How the capture result is calculated"):
-    #     st.markdown(
-    #         "**Captured CO₂ = emissions basis × capturable fraction × capture rate × annual availability.**  "
-    #         "CAPEX is scaled from the reference train using a 0.67 exponent, then annualized over the selected project life. "
-    #         "Electricity, steam, consumables and fixed O&M are added separately."
-    #     )
+
+    
+    # Table results description and precisions
+    pdf.set_font("NotoSerif", "", size=11)
+    pdf.write_html("""
+        <p align="justify">
+        <u><font size="12">How the capture result is calculated:</font></u>
+        </p>
+
+        <p align="justify">
+        <b>Captured CO₂ = emissions basis × capturable fraction × capture rate × annual availability.</b>
+        </p>
+        
+        <p align="justify">
+        For MEA, the reboiler duty is the sum of reaction heat, residual sensible heat after the rich/lean exchanger,
+        water vaporisation and heat loss.
+        </p>
+
+        <p align="justify">
+        Blower and pump work are calculated from gas/solvent flow. Solvent degradation responds to O₂ and SOₓ.
+        </p>
+
+        <p align="justify">
+        Cryogenic, oxyfuel and DMX routes use their own configured process families; MEA equations are not applied to them.
+        </p>
+        """)
+
 
 
 
@@ -312,6 +355,8 @@ def generate_pdf_report(pdf_data : PDF_REPORT_INPUT) -> None:
                    new_x="LMARGIN", new_y="NEXT")
 
     generate_pdf_section_capture(pdf, pdf_data)
+
+
 
     pdf.output("outputs//POC_STICH_report.pdf")
 
