@@ -2430,13 +2430,20 @@ pdf_data = PDF_REPORT_INPUT()
 pdf_data.scenarioLabel = selected_label
 pdf_data.scenario = SCENARIOS[selected_label]
 
+pdf_data.inputs = inputs
 pdf_data.result = result
+pdf_data.summary = summary
 pdf_data.session_state = st.session_state
 
 pdf_data.decision_rows = decision_rows
 
 pdf_data.capture_df = capture_df
 pdf_data.cost_figure = cost_figure(summary)
+
+pdf_data.purification_df = purification_df
+
+pdf_data.transport_df = transport_df
+pdf_data.pipeline_figure = pipeline_figure(inputs, result)
 
 # TODO PDF Generation management
 if generate_report_pdf_check:
