@@ -843,6 +843,13 @@ with st.sidebar:
     trajectory_run_requested = bool(
         st.session_state.pop("trajectory_run_requested", False)
     )
+    generate_report_pdf_check = st.checkbox(
+        "Print PDF report", 
+        width="stretch",
+        value=False,
+        key="checkbox_pdf_print"
+        )
+
     run_clicked = st.button(
         "▶  Run selected scenario",
         type="primary",
@@ -2422,30 +2429,33 @@ with tabs[5]:
     )
 
 
+if generate_report_pdf_check and run_clicked:
+    # generate_report_pdf_check = bool(True)
+    pdf_data = PDF_REPORT_INPUT()
 
-# TODO Add check for generate PDF
-generate_report_pdf_check = bool(True)
-pdf_data = PDF_REPORT_INPUT()
+    pdf_data.scenarioLabel = selected_label
+    pdf_data.scenario = SCENARIOS[selected_label]
 
-pdf_data.scenarioLabel = selected_label
-pdf_data.scenario = SCENARIOS[selected_label]
+    pdf_data.inputs = inputs
+    pdf_data.result = result
+    pdf_data.summary = summary
+    pdf_data.session_state = st.session_state
+    pdf_data.carbon_value = carbon_value
 
-pdf_data.inputs = inputs
-pdf_data.result = result
-pdf_data.summary = summary
-pdf_data.session_state = st.session_state
+    pdf_data.decision_rows = decision_rows
 
-pdf_data.decision_rows = decision_rows
+    pdf_data.capture_df = capture_df
+    pdf_data.cost_figure = cost_figure(summary)
 
-pdf_data.capture_df = capture_df
-pdf_data.cost_figure = cost_figure(summary)
+    pdf_data.purification_df = purification_df
 
-pdf_data.purification_df = purification_df
+    pdf_data.transport_df = transport_df
+    pdf_data.pipeline_figure = pipeline_figure(inputs, result)
 
-pdf_data.transport_df = transport_df
-pdf_data.pipeline_figure = pipeline_figure(inputs, result)
+    pdf_data.env_fig = env_fig
 
-# TODO PDF Generation management
-if generate_report_pdf_check:
+    pdf_data.benchmark_df = benchmark_df
+
+    pdf_data.baseline_result = baseline_result
     generate_pdf_report(pdf_data)
 
