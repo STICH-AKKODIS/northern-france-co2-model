@@ -843,7 +843,7 @@ with st.sidebar:
     trajectory_run_requested = bool(
         st.session_state.pop("trajectory_run_requested", False)
     )
-    generate_report_pdf_check = st.checkbox(
+    st.session_state.generate_report_pdf_check = st.checkbox(
         "Print PDF report", 
         width="stretch",
         value=False,
@@ -856,6 +856,8 @@ with st.sidebar:
         width="stretch",
         disabled=not active_ids,
     ) or trajectory_run_requested
+
+    download_pdf_button_placeholder = st.empty()    # placeholder to keep the emplacement for the pdf report download button
     st.markdown(
         """
         <div class="scope-note">
@@ -2429,7 +2431,17 @@ with tabs[5]:
     )
 
 
-if generate_report_pdf_check and run_clicked:
+if "pdf_ready" not in st.session_state:
+    st.session_state.pdf_ready = False
+
+st.session_state.setdefault("pdf_bytes", None)
+
+# Reset old generated report if we don't generate a new one
+if not st.session_state.generate_report_pdf_check:
+    st.session_state.pdf_bytes = None
+
+
+if st.session_state.generate_report_pdf_check and run_clicked:
     # generate_report_pdf_check = bool(True)
     pdf_data = PDF_REPORT_INPUT()
 
@@ -2457,5 +2469,15 @@ if generate_report_pdf_check and run_clicked:
     pdf_data.benchmark_df = benchmark_df
 
     pdf_data.baseline_result = baseline_result
-    generate_pdf_report(pdf_data)
+    # generate the report and store it in the st session to be download after
+    st.session_state.pdf_bytes = generate_pdf_report(pdf_data)
 
+
+if st.session_state.generate_report_pdf_check and st.session_state.pdf_bytes is not None:
+    with download_pdf_button_placeholder:
+        st.download_button(
+            "Download PDF report",
+            st.session_state.pdf_bytes,
+            file_name="STICH_report.pdf",
+            mime="application/pdf"
+        )

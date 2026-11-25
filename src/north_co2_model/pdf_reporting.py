@@ -1455,8 +1455,9 @@ def generate_pdf_section_decisionLab(pdf: PDF, pdf_data: PDF_REPORT_INPUT) -> No
 
 
 
-def generate_pdf_report(pdf_data : PDF_REPORT_INPUT) -> None:
+def generate_pdf_report(pdf_data : PDF_REPORT_INPUT) -> bytes:
     """ Main function to call to generate the STICH reporting """
+    """ Return the pdf to a byte format, ready to be printed / donwload ..."""
     print(f"[PDF] Reporting generation")
     
     # Instantiation of inherited class
@@ -1507,9 +1508,9 @@ def generate_pdf_report(pdf_data : PDF_REPORT_INPUT) -> None:
 
 
     # Generate the final PDF file
-    pdf.output("outputs//POC_STICH_report.pdf")
-
     print(f"[PDF] Fin reporting generation")
+    return bytes(pdf.output())
+
 
 
 
